@@ -105,7 +105,7 @@ if __name__ == '__main__':
     Path('./data/ids.txt').touch(exist_ok=True)
     Path(destination_path).mkdir(parents=True, exist_ok=True)
 
-    search_strings = list_from_txt('./data/search_strings.txt')
+    search_strings = list_from_txt('data/queries.txt')
     paper_counter = 0
 
     synonyms = extend_search()
