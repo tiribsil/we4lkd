@@ -631,8 +631,7 @@ if __name__ == '__main__':
     # constantes:
     MATCHED_SYNONYMS_PATH = '/home/matheus/WE4LKD-leukemia_w2v/pubchem/matched_synonyms/'
     CLEANED_PAPERS_PATH = '/data/ac4mvvb/WE4LKD-leukemia_w2v/pubchem/results/'
-    SYNONYM_ENTITES = [x.lower() for x in ['Drug', 'Clinical_Drug', 'Pharmacologic_Substance']]
-    PREPROCESS_FOR_BERT = False
+    SYNONYM_ENTITIES = [x.lower() for x in ['Drug', 'Clinical_Drug', 'Pharmacologic_Substance']]
     REPLACE_SYNONYMS = True
 
     # criando sessão do PySpark:
@@ -651,12 +650,7 @@ if __name__ == '__main__':
     # User Defined Function (UDF), usada na normalização de sinônimos para modelos BERT-based:
     returnDigitUDF = udf(lambda z: return_last_digit(z), T.StringType())
 
-    if PREPROCESS_FOR_BERT:
-        print('Preprocessing text for BERT-based models')
-        CLEANED_PAPERS_PATH = '/home/matheus/WE4LKD-leukemia_w2v/bert/results/'
-
-    else:
-        print('Preprocessing text for Word2Vec models')
+    print('Preprocessing text for Word2Vec models')
     
     print('Replace synonyms: ' + str(REPLACE_SYNONYMS) + '\n')
 
@@ -685,32 +679,21 @@ if __name__ == '__main__':
                 .filter(F.col('cid') != "11104792")
 
         ner_df = read_csv_table_files('/data/ac4mvvb/WE4LKD-leukemia_w2v/ner/')\
-                .where(F.col('entity').isin(SYNONYM_ENTITES))
+                .where(F.col('entity').isin(SYNONYM_ENTITIES))
 
         print('ner_df:')
         ner_df.show(truncate=False)
 
-        # se a normalização de sinônimos for ser realizada para futuro treinamento de modelos BERT, o Dataframe de sinônimos não deve ser unido (join) ao Dataframe de palavras comuns do inglês,
-        # pois elas não serão removidas do texto:
-        if PREPROCESS_FOR_BERT:
-            synonyms = synonyms\
-                    .withColumn('synonym', F.regexp_replace(F.lower(F.col('synonym')), r'\s+', ''))\
-                    .groupby('synonym')\
-                    .agg(F.min('cid').alias('cid'))\
-                    .join(titles, 'cid')\
-                    .withColumn('synonym_title', F.regexp_replace(F.lower(F.col('title')), r'\s+', ''))\
-                    .select('synonym', 'synonym_title')
         
         # se a normalização de sinônimos for ser realizada para futuro treinamento de modelos Word2vec, o Dataframe de sinônimos deve ser unido (join) ao Dataframe de palavras comuns do inglês,
         # pois elas serão removidas do texto:
-        else:
-            synonyms = synonyms\
-                    .withColumn('synonym', F.regexp_replace(F.lower(F.col('synonym')), r'\s+', ''))\
-                    .groupby('synonym')\
-                    .agg(F.min('cid').alias('cid'))\
-                    .join(titles, 'cid')\
-                    .withColumn('synonym_title', F.regexp_replace(F.lower(F.col('title')), r'\s+', ''))\
-                    .select('synonym', 'synonym_title') 
+        synonyms = synonyms\
+                .withColumn('synonym', F.regexp_replace(F.lower(F.col('synonym')), r'\s+', ''))\
+                .groupby('synonym')\
+                .agg(F.min('cid').alias('cid'))\
+                .join(titles, 'cid')\
+                .withColumn('synonym_title', F.regexp_replace(F.lower(F.col('title')), r'\s+', ''))\
+                .select('synonym', 'synonym_title')
 
         # independentemente de qual o futuro modelo a ser treinado, se houver noralização de sinônimos, o Dataframe de sinônimos é unido com o NER,
         # para que haja a normalização apenas de palavras identificadas como drogas/compostos/fármacos:
@@ -737,13 +720,13 @@ if __name__ == '__main__':
     cleaned_documents.show(truncate=False)
 
     cleaned_documents = cleaned_documents\
-                        .withColumn('summary', summary_column_preprocessing(F.col('summary'), bert_model=PREPROCESS_FOR_BERT))\
+                        .withColumn('summary', summary_column_preprocessing(F.col('summary'), bert_model=False))\
                         .select('id', 'filename', F.posexplode(F.split(F.col('summary'), ' ')).alias('pos', 'word'))
 
     print('Após summary_column_preprocessing:')
     cleaned_documents.show(truncate=False)
 
-    cleaned_documents = words_preprocessing(cleaned_documents, bert_model=PREPROCESS_FOR_BERT)\
+    cleaned_documents = words_preprocessing(cleaned_documents, bert_model=False)\
                         .withColumn('summary', F.collect_list('word').over(w2))\
                         .groupby('id', 'filename')\
                         .agg(
@@ -772,13 +755,9 @@ if __name__ == '__main__':
     df.show(truncate=False)
 
     if REPLACE_SYNONYMS:
-        if PREPROCESS_FOR_BERT:
-            df = df\
-                .select('*', F.when(df.word.rlike(r'[.,!:?-]$'), removeDigitUDF(df.word)).otherwise(df.word).alias('n_word'), F.when(df.word.rlike(r'[.,!:?-]$'), returnDigitUDF(df.word)).otherwise(None).alias('punctuation'))
-        
-        else:
-            df = df\
-                .withColumnRenamed('word', 'n_word')
+
+        df = df\
+            .withColumnRenamed('word', 'n_word')
 
         df.show(n=60, truncate=False)
 
@@ -794,41 +773,14 @@ if __name__ == '__main__':
             .distinct()\
             .where(F.col('synonym') != F.col('synonym_title'))
 
-        if PREPROCESS_FOR_BERT:
-            df = df\
-                .withColumn('synonym_title', F.when(F.col('synonym_title').isNull(), None).otherwise(F.concat_ws('', df.synonym_title, df.punctuation)))\
-                .drop('punctuation')
-            
-            df.show(n=60, truncate=False)
-
-            df = df\
-                .withColumn('word', F.coalesce(F.col('synonym_title'), F.col('word')))\
-                .drop(*('synonym', 'synonym_title', 'n_word'))\
-                .withColumn('summary', F.collect_list('word').over(w2))\
-                .groupby('id', 'filename')\
-                .agg(
-                    F.concat_ws(' ', F.max(F.col('summary'))).alias('summary')
-                )
-
-            df = df\
-                .withColumn('summary', F.regexp_replace(F.col('summary'), r' , ', ', '))\
-                .withColumn('summary', F.regexp_replace(F.col('summary'), r' \. ', '. '))\
-                .withColumn('summary', F.regexp_replace(F.col('summary'), r' ! ', '! '))\
-                .withColumn('summary', F.regexp_replace(F.col('summary'), r' \? ', '? '))\
-                .withColumn('summary', F.regexp_replace(F.col('summary'), r' : ', ': '))\
-                .withColumn('summary', F.regexp_replace(F.col('summary'), r' \.', '.'))\
-                .withColumn('summary', F.regexp_replace(F.col('summary'), r' !', '!'))\
-                .withColumn('summary', F.regexp_replace(F.col('summary'), r' \?', '?'))
-
-        else:
-            df = df\
-                .withColumn('word', F.coalesce(F.col('synonym_title'), F.col('n_word')))\
-                .drop(*('synonym', 'synonym_title', 'n_word'))\
-                .withColumn('summary', F.collect_list('word').over(w2))\
-                .groupby('id', 'filename')\
-                .agg(
-                    F.concat_ws(' ', F.max(F.col('summary'))).alias('summary')
-                )
+        df = df\
+            .withColumn('word', F.coalesce(F.col('synonym_title'), F.col('n_word')))\
+            .drop(*('synonym', 'synonym_title', 'n_word'))\
+            .withColumn('summary', F.collect_list('word').over(w2))\
+            .groupby('id', 'filename')\
+            .agg(
+                F.concat_ws(' ', F.max(F.col('summary'))).alias('summary')
+            )
             
     else:
         df = df\
@@ -843,11 +795,7 @@ if __name__ == '__main__':
     df.show(n=60, truncate=False)
 
     print('Escrevendo csv')
-    if PREPROCESS_FOR_BERT:
-        to_csv(df, target_folder=CLEANED_PAPERS_PATH, sep='|')
-    
-    else:
-        to_csv(df, target_folder=CLEANED_PAPERS_PATH)
+    to_csv(df, target_folder=CLEANED_PAPERS_PATH)
 
     if REPLACE_SYNONYMS:
         to_csv(matched_synonyms, target_folder=MATCHED_SYNONYMS_PATH)
