@@ -7,7 +7,6 @@ from pyspark.sql.session import SparkSession
 
 import nltk
 from nltk.stem import WordNetLemmatizer
-from nltk.corpus import wordnet 
 from nltk.tokenize import word_tokenize
 
 from pathlib import Path
