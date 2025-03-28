@@ -1,35 +1,35 @@
-from pathlib import Path
 import os
+from pathlib import Path
 
 if __name__ == '__main__':
-    initial_year = 1900
-    final_year = 2022
+    start_year = 1900
+    end_year = 2025
     source_path = './results/'
     destination_path = './results_aggregated/'
-    filenames = [str(x) for x in Path(source_path).glob('**/*.txt')]
 
-    os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+    # Pega os nomes de todos os arquivos que vieram do crawler.
+    filenames = list(map(str, Path(source_path).glob('**/*.txt')))
+    os.makedirs(destination_path, exist_ok=True)
 
-    for y in range(initial_year, final_year+1):
-        filtered_filenames = []
-        for f in filenames:
-            if f.split('\\')[-1].startswith(str(y)):
-                filtered_filenames.append(f)
+    # Para cada ano no intervalo...
+    for year in range(start_year, end_year + 1):
+        # Pega os nomes dos arquivos de artigos que são do ano atual.
+        filenames_current_year = [f for f in filenames if Path(f).stem.startswith(str(year))]
 
-        print('number of papers in {}: {}\n'.format(y, len(filtered_filenames)))
+        # Se não tiver nenhum desse ano, vai para o próximo.
+        if not filenames_current_year:
+            continue
 
-        if len(filtered_filenames) == 0: continue
+        print(f'{len(filenames_current_year)} papers from {year}.\n')
 
-        abstract_list = []
-        for fname in filtered_filenames:
+        # Pega os prefácios de todos os artigos desse ano.
+        abstracts = []
+        for fname in filenames:
             with open(fname, encoding='utf-8') as infile:
-                for line in infile:
-                    abstract_list.append(line)
+                abstracts.extend(infile.readlines())
 
-        filename = destination_path + 'results_file_1900_{}.txt'.format(y)
-
-        Path(filename).touch()
-        with open(filename,'w+', encoding='utf-8') as f:
-            for fname, abstract in zip(filtered_filenames, abstract_list):
-                f.write(fname.split('\\')[2][5:-4] + '|') #em linux é /, windows \\
-                f.write(abstract + '\n')
+        # Junta tudo em um só arquivo texto.
+        output_file = Path(destination_path) / f'results_file_1900_{year}.txt'
+        with open(output_file, 'w', encoding='utf-8') as f:
+            for fname, abstract in zip(filenames, abstracts):
+                f.write(f"{Path(fname).stem[5:]}|{abstract}")
