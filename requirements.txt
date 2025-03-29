@@ -1,0 +1,6 @@
+PubChemPy
+biopython
+numpy
+pyspark
+pyspark-stubs
+nltk
