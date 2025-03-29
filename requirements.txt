@@ -1,6 +1,6 @@
-PubChemPy
-biopython
-numpy
-pyspark
-pyspark-stubs
-nltk
+PubChemPy~=1.0.4
+biopython~=1.85
+numpy~=2.2.4
+pyspark~=3.5.5
+pyspark-stubs~=3.0.0.post3
+nltk~=3.9.1
