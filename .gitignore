@@ -2,3 +2,6 @@
 /results
 data/ids.txt
 /results_aggregated
+/.venv
+/.ipynb_checkpoints/
+/.ipynb_checkpoints
