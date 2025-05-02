@@ -3,3 +3,6 @@ biopython~=1.85
 numpy~=2.2.4
 pyspark~=3.5.5
 nltk~=3.9.1
+gensim~=4.3.3
+pandas~=2.2.3
+requests~=2.32.3
