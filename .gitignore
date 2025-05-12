@@ -5,3 +5,4 @@ data/ids.txt
 /.venv
 /.ipynb_checkpoints/
 /.ipynb_checkpoints
+api_key.py
