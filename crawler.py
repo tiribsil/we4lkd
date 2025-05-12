@@ -1,9 +1,15 @@
 import string, os, re, json, requests
 
+import torch
 from Bio import Entrez
 from pathlib import Path
 import pubchempy as pcp
 from bs4 import BeautifulSoup
+from google.genai.types import ListModelsResponse
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModel
+from transformers import pipeline
+from google import genai
+from google.genai import types
 
 def list_from_txt(file_path):
     strings_list = []
@@ -86,8 +92,54 @@ def extend_search():
 
     return extended
 
+# def extract_compound_names(text: str) -> list[str]:
+    model_name = "d4data/biomedical-ner-all"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForTokenClassification.from_pretrained(model_name)
 
-def fetch_treatment_compounds(disease):
+    ner_pipeline = pipeline(
+        "ner",
+        model=model,
+        tokenizer=tokenizer,
+        aggregation_strategy="simple",  # Merge subwords
+        device=0
+    )
+
+    entities = ner_pipeline(text)
+    print(f"Raw entities: {entities[:5]}...")  # Debug: show first 5 entities
+
+    # Filter and clean
+    compounds = []
+    for entity in entities:
+        if entity['entity_group'] == 'Medication':
+            word = entity['word'].strip()
+
+            # Skip fragments/short noise (e.g., "cy", "pre")
+            if len(word) <= 3 and not word.isupper():
+                continue
+
+            # Fix common splits (e.g., "l -" → "L-")
+            word = re.sub(r"\bl\s*-\s*", "L-", word, flags=re.IGNORECASE)
+            word = word.replace(" - ", "-").replace("##", "")
+
+            compounds.append(word)
+
+    return sorted(list(set(compounds)))  # Remove duplicates + sort
+
+def scrape_medscape(url: str) -> str:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    content = soup.find('div', {"id": "content_a1"}) or soup.find("article")
+    content_text = content.get_text(separator=' ', strip=True) if content else ""
+    print(f"Content text: {content_text}...")
+    return content_text
+
+# def fetch_treatment_compounds(disease):
     """Fetch treatment compounds for a given disease using medscape, filtering for 'treatment protocols'."""
     base_url = "https://search.medscape.com/search?q="
     search_url = f"{base_url}%22{disease}%20%22treatment%20protocols%22%22"
@@ -153,7 +205,7 @@ def fetch_treatment_compounds(disease):
             print(f"URL: {result_url}")
             print(f"Description: {first_result.get('description', 'No description available')}")
 
-            return result_url
+            return extract_compound_names(scrape_medscape(result_url))
 
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             print(f"Error parsing results: {e}")
@@ -163,93 +215,106 @@ def fetch_treatment_compounds(disease):
         print(f"Request failed: {e}")
         return None
 
+
+def generate_query(disease):
+    client = genai.Client(api_key='AIzaSyAKF-2tzlJ1ny8IBG0ioYZqSHwl5TuW9GQ')
+    prompt = f"""
+    Generate a comprehensive and optimized PubMed search query to retrieve biomedical papers that will help a word embedding model learn meaningful relationships between {disease}, compounds, treatments, and related biological concepts.
+        
+    The query should:
+    
+    Include MeSH terms and common synonyms for {disease}
+    Include known drugs, treatments, and drug classes related to {disease}
+    Include relevant biological mechanisms, such as pathways, genes, proteins, and biomarkers
+    Emphasize research discussing therapeutic, pharmacological, or mechanistic contexts (e.g., treatment, inhibition, activation, clinical trials, animal models)
+    Use logical operators (AND, OR) and parentheses for clarity
+    
+    Output ONLY the final query in a format suitable for use directly in PubMed with no additional text or information.
+    """
+    response = client.models.generate_content(model='gemini-2.5-pro-exp-03-25', contents=prompt)
+    return response.text
+
 if __name__ == '__main__':
     destination_directory = './data/results/'
     downloaded_paper_ids_directory = './data/ids.txt'
 
     # Cria uma lista com todos os termos de busca relevantes.
     target_disease = input('Enter a target disease: ')
-    queries = fetch_treatment_compounds(target_disease)
-    print(f'Compounds for {target_disease}: {queries}')
+    query = generate_query(target_disease)
+    print(f'Query: {query}')
     paper_counter = 0
-    exit(0) # ========================================================================================================== Adaptando até aqui!
-
-    # Insere os sinônimos dos compostos no fim da lista.
-    synonyms = extend_search()
-    queries.extend(synonyms)
 
     # Cria uma lista com os IDs de todos os artigos já obtidos e um conjunto de IDs de artigos obtidos.
     old_papers = list_from_txt(downloaded_paper_ids_directory)
     ids = set(old_papers)
 
-    # Para cada termo de busca...
-    for query in queries[100:]:
-        # Normaliza o termo de busca.
-        query = query.encode('ascii', 'ignore').decode('ascii')
-        print('searching for {}'.format(query))
+    # Normaliza o termo de busca.
+    query = query.encode('ascii', 'ignore').decode('ascii')
+    print(f'Searching for papers...')
+    exit(0) # ========================================================================================================== Adaptando até aqui!
 
-        # Procura pelo termo de busca, salva os IDs dos artigos encontrados em id_list.
-        id_list = list(search(query)['IdList'])
-        # Mantém só os que ainda não estão no conjunto de IDs conhecidos, ou seja, os novos.
-        id_list = [x for x in id_list if x not in ids]
+    # Procura pelo termo de busca, salva os IDs dos artigos encontrados em id_list.
+    id_list = list(search(query)['IdList'])
+    # Mantém só os que ainda não estão no conjunto de IDs conhecidos, ou seja, os novos.
+    id_list = [x for x in id_list if x not in ids]
 
-        # Se não achar nada novo, pode ir para o próximo termo de busca.
-        if not id_list:
-            print('No new papers found\n')
-            continue
+    # Se não achar nada novo, pode ir para o próximo termo de busca.
+    if not id_list:
+        print('No new papers found\n')
+        continue
 
-        print('{} papers found\n'.format(len(id_list)))
-        # Insere os novos IDs no conjunto.
-        ids.update(id_list)
+    print('{} papers found\n'.format(len(id_list)))
+    # Insere os novos IDs no conjunto.
+    ids.update(id_list)
 
-        # Pega os detalhes de cada artigo novo.
-        papers = fetch_details(id_list)
+    # Pega os detalhes de cada artigo novo.
+    papers = fetch_details(id_list)
 
-        # Cria uma pasta com o nome do termo de busca, formatado para poder ser nome de pasta.
-        folder_name = query.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
-        Path(destination_directory + '{}'.format(folder_name)).mkdir(parents=True, exist_ok=True)
+    # Cria uma pasta com o nome do termo de busca, formatado para poder ser nome de pasta.
+    folder_name = query.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
+    Path(destination_directory + '{}'.format(folder_name)).mkdir(parents=True, exist_ok=True)
 
-        # Para cada artigo novo...
-        for paper in papers['PubmedArticle']:
-            article_year = ''
-            article_abstract = ''
+    # Para cada artigo novo...
+    for paper in papers['PubmedArticle']:
+        article_year = ''
+        article_abstract = ''
 
-            # Se não tiver título, vai para o próximo
-            try:
-                article_title = paper['MedlineCitation']['Article']['ArticleTitle']
-                article_title_filename = article_title.lower().translate(
-                    str.maketrans('', '', string.punctuation)).replace(' ', '_')
-            except KeyError as e: continue
+        # Se não tiver título, vai para o próximo
+        try:
+            article_title = paper['MedlineCitation']['Article']['ArticleTitle']
+            article_title_filename = article_title.lower().translate(
+                str.maketrans('', '', string.punctuation)).replace(' ', '_')
+        except KeyError as e: continue
 
-            # Se não tiver prefácio, vai para o próximo.
-            try:
-                article_abstract = ' '.join(paper['MedlineCitation']['Article']['Abstract']['AbstractText'])
-                article_year = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate']['Year']
-            except KeyError as e:
-                if 'Abstract' in e.args: continue
-                if 'Year' in e.args:
-                    article_year = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate'][
-                                       'MedlineDate'][0:4]
+        # Se não tiver prefácio, vai para o próximo.
+        try:
+            article_abstract = ' '.join(paper['MedlineCitation']['Article']['Abstract']['AbstractText'])
+            article_year = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate']['Year']
+        except KeyError as e:
+            if 'Abstract' in e.args: continue
+            if 'Year' in e.args:
+                article_year = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate'][
+                                   'MedlineDate'][0:4]
 
-            # Se não tiver ano válido, vai para o próximo.
-            if len(article_year) != 4: continue
+        # Se não tiver ano válido, vai para o próximo.
+        if len(article_year) != 4: continue
 
-            # O nome do arquivo vai ser "{ano}_{nome_do_artigo}"...
-            filename = '{}_{}'.format(article_year, article_title_filename)
-            if len(filename) > 150: filename = filename[0:146]
+        # O nome do arquivo vai ser "{ano}_{nome_do_artigo}"...
+        filename = '{}_{}'.format(article_year, article_title_filename)
+        if len(filename) > 150: filename = filename[0:146]
 
-            # e vai ser escrito naquela pasta criada antes do loop.
-            path_name = destination_directory + folder_name + '/{}.txt'.format(filename)
-            path_name = path_name.encode('ascii', 'ignore').decode('ascii')
+        # e vai ser escrito naquela pasta criada antes do loop.
+        path_name = destination_directory + folder_name + '/{}.txt'.format(filename)
+        path_name = path_name.encode('ascii', 'ignore').decode('ascii')
 
-            # Escreve o arquivo.
-            with open(path_name, "a", encoding='utf-8') as file:
-                file.write(article_title + ' ' + article_abstract)
+        # Escreve o arquivo.
+        with open(path_name, "a", encoding='utf-8') as file:
+            file.write(article_title + ' ' + article_abstract)
 
-            paper_counter += 1
+        paper_counter += 1
 
-        # Coloca os IDs dos artigos novos no arquivo.
-        with open(downloaded_paper_ids_directory, 'a+', encoding='utf-8') as file:
-            for new_id in id_list: file.write('\n' + str(new_id))
+    # Coloca os IDs dos artigos novos no arquivo.
+    with open(downloaded_paper_ids_directory, 'a+', encoding='utf-8') as file:
+        for new_id in id_list: file.write('\n' + str(new_id))
 
     print('Crawler finished with {} papers collected.'.format(len(old_papers) + paper_counter))
