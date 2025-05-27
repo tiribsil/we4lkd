@@ -4,6 +4,7 @@ from Bio import Entrez
 from pathlib import Path
 from google import genai
 from api_key import MY_API_KEY
+from target_disease import target_disease
 
 def list_from_txt(file_path):
     strings_list = []
@@ -60,11 +61,11 @@ def generate_query(disease):
     return response.text
 
 if __name__ == '__main__':
-    DESTINATION_DIR = './data/results/'
+    DESTINATION_DIR = './data/raw_results/'
     DOWNLOADED_PAPERS_IDS_FILE = './data/ids.txt'
 
     # Cria uma query com termos de busca relevantes.
-    target_disease = 'acute myeloid leukemia' # input('Enter a target disease: ')
+    # target_disease = 'acute myeloid leukemia' # input('Enter a target disease: ')
     query = generate_query(target_disease)
     print(f'Query: {query}')
     paper_counter = 0
@@ -142,4 +143,3 @@ if __name__ == '__main__':
         for new_id in id_list: file.write('\n' + str(new_id))
 
     print(f'Crawler finished with {len(old_papers) + paper_counter} papers collected.')
-    exit(0) # ========================================================================================================== Adaptando até aqui!
