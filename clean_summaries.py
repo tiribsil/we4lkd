@@ -1,4 +1,5 @@
 import string
+from pathlib import Path
 
 import pyspark.sql.functions as F
 from pyspark.context import SparkContext
@@ -121,14 +122,13 @@ def get_wordnet_pos(treebank_tag):
         return 'n'
 
 def tokenize(data):
-    """Toeknizes a sentence
+    """Tokenizes a sentence
 
         Args:
         data: a sentence (string).
     """
     if data is None:
         return ['']
-
     else:
         return word_tokenize(data)
 
@@ -591,6 +591,7 @@ if __name__ == '__main__':
     CLEAN_PAPERS_PATH = f'./data/clean_results/{folder_name}/'
     SYNONYM_ENTITIES = [x.lower() for x in ['Drug', 'Clinical_Drug', 'Pharmacologic_Substance']]
 
+    exit(0) # ADAPTANDO ATÉ AQUI!!-------------------------------------------------------------------------------
     # Cria a sessão do pyspark.
     ss()
 

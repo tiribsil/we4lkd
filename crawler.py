@@ -5,6 +5,7 @@ from pathlib import Path
 from google import genai
 from api_key import MY_API_KEY
 from target_disease import target_disease
+from lark import Lark, LarkError
 
 def list_from_txt(file_path):
     strings_list = []
@@ -36,13 +37,56 @@ def fetch_details(paper_ids):
     handle.close()
     return found
 
+def follows_grammar(query_string: str) -> bool:
+    """
+    Verifica se uma string segue a gramática definida.
+    """
+    pubmed_grammar = r"""
+        ?query: group (_AND group)*
+
+        group: _LPAREN term (_OR term)* _RPAREN
+
+        term: main_body (_LBRACKET tag_body _RBRACKET)?
+
+        main_body: QUOTED_STRING | unquoted_main_body
+        unquoted_main_body: IDENTIFIER+
+
+        tag_body: IDENTIFIER+
+
+        QUOTED_STRING: /"[^"]+"/ 
+
+        _AND: "AND"
+        _OR: "OR"
+        _LPAREN: "("
+        _RPAREN: ")"
+        _LBRACKET: "["
+        _RBRACKET: "]"
+
+        IDENTIFIER: /[a-zA-Z0-9_.:-]+/
+
+        %import common.WS
+        %ignore WS
+    """
+
+    try:
+        pubmed_parser = Lark(pubmed_grammar, start='query', parser='lalr')
+    except Exception as e:
+        print(f"Erro ao criar o parser (gramática inválida?): {e}")
+        pubmed_parser = None
+
+    if not pubmed_parser:
+        print("Parser não foi inicializado corretamente.")
+        return False
+    if not query_string.strip():
+        return False
+    try:
+        pubmed_parser.parse(query_string)
+        return True
+    except LarkError as e:
+        return False
+
 def generate_query(disease):
     client = genai.Client(api_key=MY_API_KEY)
-
-    #for m in client.models.list():
-    #    for action in m.supported_actions:
-    #        if action == "generateContent":
-    #            print(m.name)
 
     prompt = f"""
     Generate a comprehensive and optimized PubMed search query to retrieve biomedical papers that will help a word embedding model learn meaningful relationships between {disease}, compounds, treatments, and related biological concepts.
@@ -58,6 +102,20 @@ def generate_query(disease):
     Output ONLY the final query in a format suitable for use directly in PubMed with no additional text or information.
     """
     response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+    if not follows_grammar(response.text):
+        prompt = f"""
+        The following text is a PubMed query that contains syntax errors:
+        "{response.text}"
+        
+        Correct this query so it adheres to PubMed query grammar, while preserving the original search intent as closely as possible.
+        
+        Your entire response should be *only* the corrected PubMed query string. Do not include any explanations, apologies, or any text other than the corrected query itself.
+        """
+        response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+    if not follows_grammar(response.text):
+        print('Query does not follow grammar rules. Exiting.')
+        # Não sei o que fazer para resolver isso, então só sai.
+        exit(1)
     return response.text
 
 if __name__ == '__main__':
