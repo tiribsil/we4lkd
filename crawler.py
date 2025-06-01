@@ -118,15 +118,30 @@ def generate_query(disease):
         exit(1)
     return response.text
 
+
+def normalize_disease_name(disease):
+    client = genai.Client(api_key=MY_API_KEY)
+
+    prompt = f"""
+    What is the canonical, most used and correct name of the disease "{disease}"?
+
+    Output ONLY the name of the disease, without any additional text or information, in lower case and no punctuation.
+    """
+    response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+
+    return response.text
+
 if __name__ == '__main__':
     DESTINATION_DIR = './data/raw_results/'
     DOWNLOADED_PAPERS_IDS_FILE = './data/ids.txt'
 
     # Cria uma query com termos de busca relevantes.
     # target_disease = 'acute myeloid leukemia' # input('Enter a target disease: ')
+    # target_disease = normalize_disease_name(target_disease)
     query = generate_query(target_disease)
     print(f'Query: {query}')
     paper_counter = 0
+    exit(0)
 
     # Cria uma lista com os IDs de todos os artigos já obtidos e um conjunto de IDs de artigos obtidos.
     old_papers = list_from_txt(DOWNLOADED_PAPERS_IDS_FILE)

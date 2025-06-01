@@ -1,6 +1,7 @@
-import string
-from pathlib import Path
+from Bio import Entrez
+Entrez.email = "tirs@estudante.ufscar.br"
 
+from pathlib import Path
 import pyspark.sql.functions as F
 from pyspark.context import SparkContext
 from pyspark.sql.session import SparkSession
@@ -9,6 +10,7 @@ from pyspark.sql.window import Window
 import pyspark.sql.types as T
 from target_disease import target_disease
 
+import string
 import nltk, os
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
@@ -156,33 +158,50 @@ def return_last_digit(data):
 
     return aux
 
+def find_mesh_terms(disease_name):
+    handle = Entrez.esearch(db="mesh", term=f"\"{disease_name}\"[MeSH Terms] ", retmax="20")
+    record = Entrez.read(handle)
+    handle.close()
+    return record["IdList"]
+
+def get_mesh_details(mesh_id):
+    handle = Entrez.efetch(db="mesh", id=mesh_id, retmode="xml")
+    records = handle.read()
+    handle.close()
+    return records
+
+def get_mesh_disease_synonyms(disease_details):
+    lines = disease_details.splitlines()
+    synonyms = []
+    start = False
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('Entry Terms:'):
+            start = True
+            continue
+        if start:
+            if ',' in line:
+                parts = [p.strip() for p in line.split(',')]
+                term = ' '.join(reversed(parts))
+            else:
+                term = line
+            synonyms.append(term.lower())
+    return synonyms
+
 def summary_column_preprocessing(column):
-    """Executes intial preprocessing in a PySpark text column. It removes some unwanted regex from the text.
+    """Executes initial preprocessing in a PySpark text column. It removes some unwanted regex from the text.
     Args:
         column: the name of the column to be processed.
     """
+    disease_details = get_mesh_details(find_mesh_terms(target_disease))
 
-    aml_synonyms = [
-        'acute[- ]?myeloid[- ]?leukemia',
-        'acute myelocytic leukemia',
-        'acute myelogenous leukemia',
-        'acute granulocytic leukemia',
-        'acute non-lymphocytic leukemia',
-        'acute mylogenous leukemia',
-        'acute myeloid leukemia',
-        'acute nonlymphoblastic leukemia',
-        'acute myeloblastic leukemia',
+    disease_synonyms = get_mesh_disease_synonyms(disease_details)
+    canonical_name = target_disease.lower().replace(' ', '_')
 
-        # subtipos de AML:
-        'acute erythroid leukemia',
-        'acute myelomonocytic leukemia',
-        'acute monocytic leukemia',
-        'acute megakaryoblastic leukemia',
-        'acute promyelocytic leukemia',
-    ]
-
-    # Cria um regex para procurar os sinônimos da AML.
-    regex = r'(?i)({})'.format('|'.join(aml_synonyms))
+    # Cria um regex para procurar os sinônimos da doença.
+    regex = r'(?i)({})'.format('|'.join(disease_synonyms))
 
     # Remove os espaços em branco do início e fim da coluna.
     column = F.trim(column)
@@ -197,282 +216,10 @@ def summary_column_preprocessing(column):
     # Normaliza o espaço em branco.
     column = F.regexp_replace(column, r'\s+', ' ')
 
-    # Normaliza termos para leukemia.
-    column = F.regexp_replace(column, r'(?i)(leukaemia)', 'leukemia')
-    column = F.regexp_replace(column, r'(?i)(leukaemic)', 'leukemic')
+    # Troca aqueles termos que são sinônimos da doença por um nome único.
+    column = F.regexp_replace(column, regex, canonical_name)
 
-    # Troca aqueles termos que são sinônimos de AML por AML.
-    column = F.regexp_replace(column, regex, 'AML')
-
-    # Troca alguns sinônimos mais complexos por AML.
-    column = F.regexp_replace(column, r'(?i)(acute myeloid or (lymphoblastic|lymphoid) leukemia[s]?)', 'AML or ALL')
-    column = F.regexp_replace(column, r'(?i)(acute myeloid and (lymphoblastic|lymphoid) leukemia[s]?)', 'AML and ALL')
-    column = F.regexp_replace(column, r'(?i)(acute myeloid and chronic lymphocytic leukemia[s]?)', 'AML and CLL')
-
-    # Troca sinônimos de compostos pelo nome base.
-    # cytarabine
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside triphosphate )', ' cytarabinetriphosphate ')
-    column = F.regexp_replace(column, r'(?i)(cytosine arabinoside triphosphate )', 'cytarabinetriphosphate ')
-    column = F.regexp_replace(column, r'(?i)(\(cytosine arabinoside triphosphate\))', '(cytarabinetriphosphate)')
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside triphosphate.)', ' cytarabinetriphosphate.')
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside triphosphate,)', ' cytarabinetriphosphate,')
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside monophosphate )', ' cytarabinemonophosphate')
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside monophosphate.)', ' cytarabinemonophosphate.')
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside monophosphate,)', ' cytarabinemonophosphate,')
-    column = F.regexp_replace(column, r" arabinocytidine 5' phosphate|arabinofuranosylcytosine 5'-triphosphate|Ara-CTP", " cytarabine5phosphate")
-    column = F.regexp_replace(column, r"(?i)(1-beta-D|1-β-d|1β-d|1 beta-D)-Arabinofuranosylcytosine 5'-triphosphate", "cytarabine5phosphate")
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside | \[Ara-C\] )', ' cytarabine ')
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside\.)', ' cytarabine.')
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside,)', ' cytarabine,')
-    column = F.regexp_replace(column, r'(?i)( cytosine arabinoside:)', ' cytarabine:')
-    column = F.regexp_replace(column, r'(?i)(\(cytosine arabinoside\))', '(cytarabine)')
-    column = F.regexp_replace(column, r'(?i)(\(ara[-]?c\))', '(cytarabine)')
-    column = F.regexp_replace(column, r'(?i)(\(ara[-]?c, )', '(cytarabine, ')
-    column = F.regexp_replace(column, r'(?i)(\(ara[-]?c )', '(cytarabine ')
-    column = F.regexp_replace(column, r'(?i)( ara[-]?c\))', ' cytarabine)')
-    column = F.regexp_replace(column, r'(?i)( ara[-]?c/)', ' cytarabine/)')
-    column = F.regexp_replace(column, r'(?i)(/ara[-]?c\.)', '/cytarabine.')
-    column = F.regexp_replace(column, r'(?i)(/ara[-]?c )', '/cytarabine ')
-    column = F.regexp_replace(column, r'(?i)(ara[-]?c-induced)', 'cytarabine-induced')
-    column = F.regexp_replace(column, r'(?i)(ara[-]?c-treated)', 'cytarabine-treated')
-    column = F.regexp_replace(column, r'(?i)(ara[-]?c-based)', 'cytarabine-based')
-    column = F.regexp_replace(column, r'(?i)(ara[-]?c-resistant)', 'cytarabine-resistant')
-    column = F.regexp_replace(column, r'(?i)(/ara[-]?c/)', '/cytarabine/')
-    column = F.regexp_replace(column, r'(HDAra-C|HD-Ara-C)', 'high-dose cytarabine')
-    column = F.regexp_replace(column, r'(LDAra-C|LD-Ara-C|LDAC)', 'low-dose cytarabine')
-    column = F.regexp_replace(column, r'(IDAra-C|ID-Ara-C)', 'intermediate-dose cytarabine')
-    column = F.regexp_replace(column, r'\(Ara-C;', '(cytarabine;')
-    column = F.regexp_replace(column, r'\[3H\]Ara-C', '([3H]cytarabine')
-    column = F.regexp_replace(column, r' Arabinocytidine', ' Cytarabine')
-    column = F.regexp_replace(column, r"(?i)(1-beta-D|1-β-d|1β-d|1 beta-D)-Arabinofuranosyl[-]?cytosine ", "cytarabine ")
-    column = F.regexp_replace(column, r"(?i)(1-beta-D|1-β-d|1β-d|1 beta-D)-Arabinofuranosyl[-]?cytosine,", "cytarabine,")
-    column = F.regexp_replace(column, r"(?i)(1-beta-D|1-β-d|1β-d|1 beta-D)-Arabinofuranosyl[-]?cytosine.", "cytarabine.")
-    column = F.regexp_replace(column, r'(?i)( Arabinofuranosylcytosine | Ara-C )', " cytarabine ")
-    column = F.regexp_replace(column, r'(?i)( Arabinofuranosylcytosine,)', " cytarabine,")
-    column = F.regexp_replace(column, r'(?i)( Arabinofuranosylcytosine\.)', " cytarabine.")
-    column = F.regexp_replace(column, r' arabinocytidine ', ' cytarabine ')
-    column = F.regexp_replace(column, r' arabinocytidine,', ' cytarabine,')
-    column = F.regexp_replace(column, r' arabinocytidine:', ' cytarabine:')
-    column = F.regexp_replace(column, r' arabinocytidine\.', ' cytarabine.')
-    column = F.regexp_replace(column, r'147-94-4', 'cytarabine')
-    column = F.regexp_replace(column, r'\(Cytosar-U\)|\(Cytosar\)', '(cytarabine)')
-    column = F.regexp_replace(column, r'(?i)\(Cytosar-U,', '(cytarabine,')
-    column = F.regexp_replace(column, r'(?i) cytosar\)', ' cytarabine)')
-    column = F.regexp_replace(column, r' aracytin[e]? ', ' cytarabine ')
-    column = F.regexp_replace(column, r' aracytin[e]?\.', ' cytarabine.')
-    column = F.regexp_replace(column, r' aracytin[e]?,', ' cytarabine,')
-    column = F.regexp_replace(column, r'\+aracytine\+', '+cytarabine+')
-    column = F.regexp_replace(column, r'-aracytine ', '-cytarabine ')
-    column = F.regexp_replace(column, r'-aracytine\.', '-cytarabine.')
-    column = F.regexp_replace(column, r'-aracytine:', '-cytarabine:')
-    column = F.regexp_replace(column, r'(?i)(Cytosine beta-D-arabinoside)', 'cytarabine')
-    column = F.regexp_replace(column, r'(?i)(Cytosine-1-beta-D-arabinofuranoside)', 'cytarabine')
-    column = F.regexp_replace(column, r'(?i)(beta-ara c)', 'cytarabine')
-    column = F.regexp_replace(column, r'(?i)(liposomal cytarabine)', 'liposomalcytarabine')
-    column = F.regexp_replace(column, r'(?i)(depocyte)', 'liposomalcytarabine')
-    column = F.regexp_replace(column, r"4'-thio-ara-C", "4-thio-cytarabine")
-    column = F.regexp_replace(column, r"NSC[ -]63878", "cytarabine")
-    column = F.regexp_replace(column, r"ofcytarabine", "of cytarabine")
-
-    # daunorubicin:
-    column = F.regexp_replace(column, r'[Dd]aunomycin \(DAU\)|[Dd]aunorubicin \(DAU\)|daunorubicin hydrochloride \(DAU\)', 'daunorubicin (daunorubicin)')
-    column = F.regexp_replace(column, r'NSC[ -]?82151|Rubomycin C|[^R]DNX[^B]', 'daunorubicin')
-    column = F.regexp_replace(column, r'daunomycin-', 'daunorubicin-')
-    column = F.regexp_replace(column, r'Daunomycin-', 'Daunorubicin-')
-    column = F.regexp_replace(column, r'(?i)( daunorubicine )', ' daunorubicin ')
-    column = F.regexp_replace(column, r'\(DNR\)', '(daunorubicin)')
-    column = F.regexp_replace(column, r'\(daunomycin ', '(daunorubicin ')
-    column = F.regexp_replace(column, r'rubidomicine|rubidomicin', 'daunorubicin')
-    column = F.regexp_replace(column, r'leukaemomycin C', 'daunorubicin')
-    column = F.regexp_replace(column, r'(Cerubidine)', '(daunorubicin)')
-    column = F.regexp_replace(column, r'[Ll]iposomal daunorubicin', 'liposomaldaunorubicin')
-    column = F.regexp_replace(column, r'(?i)daunoxome', 'daunorubicin')
-    column = F.regexp_replace(column, r'LDL-daunomycin|LDL:daunomycin', 'low-density-lipoproteins-daunorubicin')
-    column = F.regexp_replace(column, r'\(daunomycin\)', '(daunorubicin)')
-    column = F.regexp_replace(column, r'\(daunomycin,', '(daunorubicin,')
-    column = F.regexp_replace(column, r'LDL-daunomycin', 'low-density-lipoproteins-daunorubicin')
-    column = F.regexp_replace(column, r'[\[]?3H[\]]?[-]?daunomycin', '3H-daunorubicin')
-    column = F.regexp_replace(column, r' daunomycin\.', ' daunorubicin.')
-    column = F.regexp_replace(column, r'13-dihydrodaunomycin', '13-dihydrodaunorubicin')
-    column = F.regexp_replace(column, r'cys-aconytil-daunomycin', 'cys-aconytil-daunorubicin')
-    column = F.regexp_replace(column, r'\[daunomycin\]', '[daunorubicin]')
-    column = F.regexp_replace(column, r'porphyrin-daunomycin[a-z]', 'Por-(daunorubicin)')
-
-    # azacitidine:
-    column = F.regexp_replace(column, r'5-AZA|5-azaC|5-AZAC|5-Aza|5-ACR|5-AC', 'azacitidine')
-    column = F.regexp_replace(column, r" 5[']?[-]?azac[yi]tidine ", ' azacitidine ')
-    column = F.regexp_replace(column, r' 5-azac[yi]tidine-', ' azacitidine-')
-    column = F.regexp_replace(column, r' 5-azac[yi]tidine\.', ' azacitidine.')
-    column = F.regexp_replace(column, r' 5-azac[yi]tidine;', ' azacitidine:')
-    column = F.regexp_replace(column, r' 5-azac[yi]tidine,', ' azacitidine,')
-    column = F.regexp_replace(column, r' 5-azac[yi]tidine\)', ' azacitidine)')
-    column = F.regexp_replace(column, r'(?i)(5-aza-CR)', 'azacitidine')
-    column = F.regexp_replace(column, r'(?i)( azac[yi]tidine )', ' azacitidine ')
-    column = F.regexp_replace(column, r'\(AZA\)', '(azacitidine)')
-    column = F.regexp_replace(column, r'(?i)(vidaza)', 'azacitidine')
-
-    # gemtuzumab-ozogamicin:
-    column = F.regexp_replace(column, r"(?i)(gemtuzumab[- ]?ozogam[yi]cin) \(GO\)", 'gemtuzumab-ozogamicin (gemtuzumab-ozogamicin)')
-    column = F.regexp_replace(column, r"(?i)(gemtuzumab[- ]?ozogam[yi]cin) \(GO,", 'gemtuzumab-ozogamicin (gemtuzumab-ozogamicin,')
-    column = F.regexp_replace(column, r"(?i)(gemtuzumab[- ]?ozogam[yi]cin) \(GO;", 'gemtuzumab-ozogamicin (gemtuzumab-ozogamicin;')
-    column = F.regexp_replace(column, r"(?i)(gemtuzumab ozogam[yi]cin)", 'gemtuzumab-ozogamicin')
-    column = F.regexp_replace(column, r"CMA-676|FLASI-GO", 'gemtuzumab-ozogamicin')
-    column = F.regexp_replace(column, r"(?i)(my[o]?lotarg)", 'gemtuzumab-ozogamicin')
-
-    # midostaurin:
-    column = F.regexp_replace(column, r"(?i)(4'-N-benzoyl staurosporine|4'-N-Benzoylstaurosporine|N-Benzoylstaurosporine)", 'midostaurin')
-    column = F.regexp_replace(column, r"(?i)(rydapt)", 'midostaurin')
-    column = F.regexp_replace(column, r"PKC[ -]?412|CGP[ -]?41251|CAS 120685-11-2", 'midostaurin')
-
-    # CPX-351 (ou vyxeos):
-    column = F.regexp_replace(column, r"(?i)(cpx[- ]?351)", 'vyxeos')
-    column = F.regexp_replace(column, r"(?i)(vyxeos liposomal)", 'vyxeos')
-    column = F.regexp_replace(column, r"(?i)(Daunorubicin[ ]?\/[ ]?cytarabine liposome|liposomaldaunorubicin/cytarabine)", 'vyxeos')
-
-    # ivosidenib:
-    column = F.regexp_replace(column, r"(?i)(tibsovo)", 'ivosidenib')
-    column = F.regexp_replace(column, r"(?i)(ag120)", 'ivosidenib')
-
-    # venetoclax:
-    column = F.regexp_replace(column, r"(?i)(ABT[ -]?199|GDC[ -]?0199|venclyxto|venclexta)", 'venetoclax')
-
-    # enasidenib:
-    column = F.regexp_replace(column, r"(?i)(ag[ -]?221|idhifa|cc[ -]?90007)", 'enasidenib')
-
-    # gilteritinib:
-    column = F.regexp_replace(column, r"Xospata|ASP2215", 'gilteritinib')
-
-    # glasdegib:
-    column = F.regexp_replace(column, r"\(DAU\)", '(glasdegib)')
-    column = F.regexp_replace(column, r"(DAURISMO|PF[ -][0]?4449913|PF[ -]913)", 'glasdegib')
-
-    # arsenic trioxide:
-    column = F.regexp_replace(column, r"(?i)(arsenic trioxide)", 'arsenictrioxide')
-    column = F.regexp_replace(column, r"As2[O0]3,", 'arsenictrioxide,')
-    column = F.regexp_replace(column, r"As2[O0]3\)", 'arsenictrioxide)')
-    column = F.regexp_replace(column, r"As2[O0]3\.", 'arsenictrioxide.')
-    column = F.regexp_replace(column, r"As2[O0]3$", 'arsenictrioxide.')
-    column = F.regexp_replace(column, r"As2[O0]3 ", 'arsenictrioxide ')
-    column = F.regexp_replace(column, r"As2[O0]3", 'arsenictrioxide')
-    column = F.regexp_replace(column, r"As\(2\)[O0]\(3\) ", 'arsenictrioxide ')
-    column = F.regexp_replace(column, r" ATO ", ' arsenictrioxide ')
-    column = F.regexp_replace(column, r"\(ATO\)", '(arsenictrioxide)')
-    column = F.regexp_replace(column, r"\(ATO[,;]", '(arsenictrioxide,')
-    column = F.regexp_replace(column, r" ATO-", ' arsenictrioxide-')
-    column = F.regexp_replace(column, r"(?i)(trisenoxt|trisenox)", 'arsenictrioxide')
-    column = F.regexp_replace(column, r"(?i)(arsenic\(III\) oxide)", 'arsenictrioxide')
-
-    # cyclophosphamide:
-    column = F.regexp_replace(column, r"(?i)(methylerythritol cyclophosphane)", 'methylerythritolcyclophosphamide')
-    column = F.regexp_replace(column, r"(?i)(cyclophosphane)", 'cyclophosphamide')
-    column = F.regexp_replace(column, r"cyclophosphamide-endoxan|Cyklofosfamid|NSC[ -]?26271|Genoxal", 'cyclophosphamide')
-    column = F.regexp_replace(column, r"(?i)(endoxane|endoxan|cyclophosphamidum)", 'cyclophosphamide')
-    column = F.regexp_replace(column, r"(?i)( neosar\))", ' cyclophosphamide)')
-
-    # dexamethasone:
-    column = F.regexp_replace(column, r"(?i)(decadron|dexasone|dexason|Dextenza|Dexycu)", 'dexamethasone')
-    column = F.regexp_replace(column, r"Maxidex|dexasone|Hexadrol|Oradexon|Fortecortin", 'dexamethasone')
-    column = F.regexp_replace(column, r"[Ii]ntratympanic dexamethazone", 'intratympanicdexamethasone')
-    column = F.regexp_replace(column, r"(?i)(de[sx]ametha[sz]one|Desametasone)", 'dexamethasone')
-    column = F.regexp_replace(column, r"dexamethasone \(DMS\)", 'dexamethasone (dexamethasone)')
-
-    # idarubicin:
-    column = F.regexp_replace(column, r"NSC-256439|Zavedos", 'idarubicin')
-    column = F.regexp_replace(column, r"\(4-demethoxydauno(mycin|rubicin)\)", '(idarubicin)')
-    column = F.regexp_replace(column, r"\(4-demethoxydaunorubicin;", '(idarubicin;')
-    column = F.regexp_replace(column, r" 4-demethoxydauno(mycin|rubicin) ", ' idarubicin ')
-    column = F.regexp_replace(column, r" 4-demethoxydauno(mycin|rubicin)\.", ' idarubicin.')
-    column = F.regexp_replace(column, r" 4-demethoxydauno(mycin|rubicin),", ' idarubicin,')
-    column = F.regexp_replace(column, r"\[14-14C\]4-demethoxydaunorubicin HCl", '[14-14C]idarubicinhcl')
-    column = F.regexp_replace(column, r"(?i)(Idarubicine)", 'idarubicin')
-    column = F.regexp_replace(column, r"(?i)(idarubicin hcl)", 'idarubicin')
-    column = F.regexp_replace(column, r"(?i)(4-DMD[N]?R )", 'idarubicin ')
-    column = F.regexp_replace(column, r"(?i)(4-DMD[N]?R[.;])", 'idarubicin,')
-    column = F.regexp_replace(column, r"(?i)(4-DMD[N]?R\.)", 'idarubicin.')
-    column = F.regexp_replace(column, r"(?i)(4-DMD[N]?R\))", 'idarubicin)')
-    column = F.regexp_replace(column, r"(?i)(4-DMD[N]?R-)", 'idarubicin')
-
-    # mitoxantrone:
-    column = F.regexp_replace(column, r"mitoxantron,cytarabine", 'mitoxantrone, cytarabine')
-    column = F.regexp_replace(column, r"(?i)(mito[zx]ant[h]?rone|novantrone)", 'mitoxantrone')
-    column = F.regexp_replace(column, r"NSC[ -]?301739", 'mitoxantrone')
-    column = F.regexp_replace(column, r"CL[ -]232[,]?315", 'mitoxantronehydrochloride')
-    column = F.regexp_replace(column, r"mitoxantron ", 'mitoxantrone ')
-    column = F.regexp_replace(column, r"mitoxantron\.", 'mitoxantrone.')
-    column = F.regexp_replace(column, r"(?i)(mitoxantrone \(mit\))", 'mitoxantrone (mitoxantrone)')
-    column = F.regexp_replace(column, r"(?i)(mitoxantrone \(mit,)", 'mitoxantrone (mitoxantrone,')
-    column = F.regexp_replace(column, r"(?i)(mitoxantrone) \((MTX|MIP|MX)\)", 'mitoxantrone (mitoxantrone)')
-    column = F.regexp_replace(column, r"(?i)(mitoxantrone hydrochloride) \((MIT|MTO)\)", 'mitoxantronehydrochloride (mitoxantronehydrochloride)')
-    column = F.regexp_replace(column, r"(?i)(mitoxantrone hydrochloride)", 'mitoxantronehydrochloride')
-    column = F.regexp_replace(column, r"(?i)(1,4-dihydroxy-5,8-bis[ ]?\(\([ ]?\(2-\[\(2-hydroxyethyl\)amino\]ethyl\)[ -]?amino\)\)-9,10-anthracenedione dihydrochloride)", 'mitoxantrone')
-
-    # pemigatinib:
-    column = F.regexp_replace(column, r"PEMAZYRE", 'pemigatinib')
-
-    # prednisone:
-    column = F.regexp_replace(column, r"1-dehydrocortisone|[Dd]eltasone|meticorten|NSC[ -]?10023", 'prednisone')
-    column = F.regexp_replace(column, r"(?i)(ultracorten-H|ultracorten H|ultracortene|ultracorten)", 'prednisone')
-
-    # rituximab:
-    column = F.regexp_replace(column, r"Rituxan", 'Rituximab')
-    column = F.regexp_replace(column, r"rituxan|\[RTX-(EU|US)\]|Truxima|CT-P10", 'rituximab')
-    column = F.regexp_replace(column, r"(?i)(MabThera)", 'rituximab')
-    column = F.regexp_replace(column, r"rituximab/Rituximab", 'rituximab rituximab')
-
-    # thioguanine:
-    column = F.regexp_replace(column, r"[Tt]ioguanine|NSC-752", 'thioguanine')
-    column = F.regexp_replace(column, r"(?i)(6-thioguanine| 6 thioguanine)", 'thioguanine')
-    column = F.regexp_replace(column, r"daunorubicin-cytarabine-6 thioguanine", 'daunorubicin cytarabine thioguanine')
-    column = F.regexp_replace(column, r"\(6TG\)", '(thioguanine)')
-    column = F.regexp_replace(column, r" 6TG ", ' thioguanine ')
-    column = F.regexp_replace(column, r" 6TG\.", ' thioguanine.')
-    column = F.regexp_replace(column, r" 6TG,", ' thioguanine,')
-    column = F.regexp_replace(column, r"6TG-", 'thioguanine-')
-    column = F.regexp_replace(column, r"2-amino-6-mercaptopurine|6-mercaptoguanine", 'thioguanine')
-    column = F.regexp_replace(column, r"6[ -]?TG[Rr]", 'thioguanine resistance')
-    column = F.regexp_replace(column, r"(?i)(thioguanine \(tg\))", 'thioguanine (thioguanine)')
-
-    # vincristine:
-    column = F.regexp_replace(column, r"vincrystine|NSC[ -]67574", 'vincristine')
-    column = F.regexp_replace(column, r"(?i)(vincristine sulfate)", 'vincristinesulfate')
-    column = F.regexp_replace(column, r"\[3H\][-]?vincristine|3Hvincristine", '3H-vincristine')
-    column = F.regexp_replace(column, r"\[3H\][-]?VCR|3HVCR", '3H-vincristine')
-    column = F.regexp_replace(column, r"[Vv]incristine \(VCR\)", 'vincristine (vincristine)')
-    column = F.regexp_replace(column, r"CAS 57-22-7", 'vincristine')
-    column = F.regexp_replace(column, r"vincristine,cytarabine", 'vincristine, cytarabine')
-
-    # C-1027:
-    column = F.regexp_replace(column, r"(?i)(lidamycin\(LDM\))", 'c-1027 (c-1027)')
-    column = F.regexp_replace(column, r"lidamycin", 'c-1027')
-
-    # glyceryl behenate:
-    column = F.regexp_replace(column, r"glyceryl behenate", 'glycerylbehenate')
-    column = F.regexp_replace(column, r"[Cc]ompritol 888 ATO", 'glycerylbehenate')
-
-    # decitabine:
-    column = F.regexp_replace(column, r"2'-deoxy-(beta-D|beta-d|β-d|β-D)-5-azacytidine", 'decitabine')
-    column = F.regexp_replace(column, r"2'-deoxy-(beta-L|beta-l|β-l|β-L)-5-azacytidine", 'l-decitabine')
-
-    # daunomycinone:
-    column = F.regexp_replace(column, r'daunomycin aglycone', 'daunomycinone')
-    column = F.regexp_replace(column, r'13-dihydrodaunomycinone', 'feudomycinonea')
-
-    # valrubicin:
-    column = F.regexp_replace(column, r'AD32|AD 32|AD-32', 'valrubicin')
-    column = F.regexp_replace(column, r'(?i)(N-Trifluoroacetyladriamycin[ -]14-valerate)', 'valrubicin')
-
-    # carmustine:
-    column = F.regexp_replace(column, r'NSC-409962', 'carmustine')
-    column = F.regexp_replace(column, r'BCNU|BCNU-NSC', 'carmustine')
-
-    # dextromethorphan:
-    column = F.regexp_replace(column, r'DXM[S]?', 'dextromethorphan')
-
-    # docetaxel:
-    column = F.regexp_replace(column, r'NSC[ -]?628503|RP[ -]?56976', 'docetaxel')
-
-    # dactinomycin:
-    column = F.regexp_replace(column, r'[Aa]ctinomycin[ -]D', 'dactinomycin')
+    # Troca sinônimos de compostos por nomes únicos.
 
     # Deixa tudo minúsculo.
     column = F.lower(column)
@@ -483,11 +230,6 @@ def words_preprocessing(df, column='word'):
     """Corrige alguns erros de digitação, normaliza alguns símbolos e remove palavras irrelevantes."""
 
     fix_typos_dict = {
-        'citarabine': 'cytarabine',
-	    'hdara-c': 'high-dose cytarabine',
-	    'no-arac': 'n4-octadecyl-1-beta-d-arabinofuranosylcytosine',
-	    'ara-c-ab': 'arac-agarose-bead',
-	    'anhydro-ara-fc': "2,2'-anhydro-1-beta-d-arabinofuranosyl-5-fluorocytosine",
         'mol-ecule': 'molecule',
         '‑': '-',
         '‒': '-',
@@ -591,7 +333,6 @@ if __name__ == '__main__':
     CLEAN_PAPERS_PATH = f'./data/clean_results/{folder_name}/'
     SYNONYM_ENTITIES = [x.lower() for x in ['Drug', 'Clinical_Drug', 'Pharmacologic_Substance']]
 
-    exit(0) # ADAPTANDO ATÉ AQUI!!-------------------------------------------------------------------------------
     # Cria a sessão do pyspark.
     ss()
 
@@ -615,17 +356,13 @@ if __name__ == '__main__':
         # o DataFrame de palavras em inglês será usado para remover tais palavras do texto, antes do treinamento dos modelos.
     #####################################################################
 
-    # Cria tabela de sinônimos (cid | sinônimo), filtra alguns compostos que deram problema.
+    # Cria tabela de sinônimos (cid | sinônimo).
     synonyms = read_csv_table_files('./data/synonyms')
-    synonyms = synonyms\
-                .filter(F.col('cid') != "122172881")\
-                .filter(F.col('cid') != "11104792")
+    synonyms = synonyms
 
-    # Cria tabela de nomes (cid | nome), filtra alguns compostos que deram problema.
+    # Cria tabela de nomes (cid | nome).
     titles = read_csv_table_files('./data/titles.csv', sep='|')
-    titles = titles\
-            .filter(F.col('cid') != "122172881")\
-            .filter(F.col('cid') != "11104792")
+    exit(0) # ADAPTANDO ATÉ AQUI!!-------------------------------------------------------------------------------
 
     # Cria tabela NER, que identifica o que cada termo é.
     ner_df = read_csv_table_files('./ner/')\
