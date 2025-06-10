@@ -1,7 +1,5 @@
 /.idea
-/results
-data/ids.txt
-/results_aggregated
+/data
 /.venv
 /.ipynb_checkpoints
 api_key.py

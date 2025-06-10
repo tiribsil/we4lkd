@@ -8,7 +8,7 @@ from pyspark.sql.session import SparkSession
 from pyspark.sql.functions import udf
 from pyspark.sql.window import Window
 import pyspark.sql.types as T
-from target_disease import target_disease
+from target_disease import target_disease, folder_name
 
 import string
 import nltk, os
@@ -18,8 +18,16 @@ from nltk.tokenize import word_tokenize
 from functools import reduce
 
 def ss():
-    sc = SparkContext.getOrCreate()
-    return SparkSession(sc)
+    spark = SparkSession.builder \
+        .appName("LargeDataProcessingApp")\
+        .config("spark.executor.memory", "64g")\
+        .config("spark.driver.memory", "32g")\
+        .config("spark.sql.shuffle.partitions", "1000")\
+        .config("spark.sql.adaptive.enabled", "true")\
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")\
+        .config("spark.local.dir", "/tmp/spark-temp")\
+        .getOrCreate()
+    return spark
 
 def dataframes_from_txt(summaries_path):
     filenames = sorted([str(x) for x in Path(summaries_path).glob('*.txt')])
@@ -79,17 +87,12 @@ def get_csv_in_folder(file_path):
 
     return os.path.join(file_path, files[0])
 
-def read_csv_table_files(file_path, sep=','):
-    full_path = file_path
-
-    if file_path[-3:] != 'csv':
-        file_path = get_csv_in_folder(file_path)
-
+def read_table_file(file_path, sep, has_header):
     return ss()\
         .read\
-        .option('header', 'true')\
+        .option('header', has_header)\
         .option('sep', sep)\
-        .csv(full_path)
+        .csv(file_path)
 
 def to_csv(df, target_folder, num_files=1, sep=','):
     """Saves a PySpark Dataframe into .csv file.
@@ -329,8 +332,8 @@ if __name__ == '__main__':
     nltk.download('omw-1.4', quiet=True)
     nltk.download('stopwords', quiet=True)
 
-    folder_name = target_disease.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
-    CLEAN_PAPERS_PATH = f'./data/clean_results/{folder_name}/'
+    CLEAN_PAPERS_PATH = f'./data/{folder_name}/clean_results'
+    AGGREGATED_RESULTS_PATH = f'./data/{folder_name}/aggregated_results'
     SYNONYM_ENTITIES = [x.lower() for x in ['Drug', 'Clinical_Drug', 'Pharmacologic_Substance']]
 
     # Cria a sessão do pyspark.
@@ -341,8 +344,6 @@ if __name__ == '__main__':
     w2 = Window.partitionBy(F.col('filename'), F.col('id')).orderBy(F.col('pos'))
 
     print('Preprocessing text for Word2Vec models')
-
-    print('Replace synonyms: ' + str(True) + '\n')
 
     #####################################################################
     # PASSO 1
@@ -357,16 +358,17 @@ if __name__ == '__main__':
     #####################################################################
 
     # Cria tabela de sinônimos (cid | sinônimo).
-    synonyms = read_csv_table_files('./data/synonyms')
-    synonyms = synonyms
+    synonyms = read_table_file('./data/compound_data/CID-Synonym-filtered', '\t', 'false')
+    synonyms = synonyms.withColumnRenamed("_c0", "cid")\
+                        .withColumnRenamed("_c1", "synonym")
 
-    # Cria tabela de nomes (cid | nome).
-    titles = read_csv_table_files('./data/titles.csv', sep='|')
-    exit(0) # ADAPTANDO ATÉ AQUI!!-------------------------------------------------------------------------------
+    # Cria tabela de nomes principais (cid | nome).
+    titles = read_table_file('./data/compound_data/CID-Title', '\t', 'false')
+    titles = titles.withColumnRenamed("_c0", "cid")\
+                    .withColumnRenamed("_c1", "title")
 
     # Cria tabela NER, que identifica o que cada termo é.
-    ner_df = read_csv_table_files('./ner/')\
-            .where(F.col('entity').isin(SYNONYM_ENTITIES))
+    ner_df = read_table_file(f'./data/{folder_name}/ner_table.csv', ',', 'true')
 
     print('ner_df:')
     ner_df.show(truncate=False)
@@ -374,6 +376,7 @@ if __name__ == '__main__':
 
     ## se a normalização de sinônimos for ser realizada para futuro treinamento de modelos Word2vec, o Dataframe de sinônimos deve ser unido (join) ao Dataframe de palavras comuns do inglês,
     ## pois elas serão removidas do texto:
+
 
     # Junta as tabelas de sinônimo e nome.
     synonyms = synonyms\
@@ -384,13 +387,9 @@ if __name__ == '__main__':
             .withColumn('synonym_title', F.regexp_replace(F.lower(F.col('title')), r'\s+', ''))\
             .select('synonym', 'synonym_title')
 
+
     ## independentemente de qual o futuro modelo a ser treinado, se houver noralização de sinônimos, o Dataframe de sinônimos é unido com o NER,
     ## para que haja a normalização apenas de palavras identificadas como drogas/compostos/fármacos:
-
-    # Filtra compostos específicos (devem ter dado algum problema).
-    synonyms = synonyms\
-                .filter(F.col('synonym_title') != 'methyl(9r,10s,11s,12r,19r)-11-acetyloxy-12-ethyl-4-[(13s,15r,17s)-17-ethyl-17-hydroxy-13-methoxycarbonyl-1,11-diazatetracyclo[13.3.1.04,12.05,10]nonadeca-4(12),5,7,9-tetraen-13-yl]-8-formyl-10-hydroxy-5-methoxy-8,16-diazapentacyclo[10.6.1.01,9.02,7.016,19]nonadeca-2,4,6,13-tetraene-10-carboxylate')\
-                .filter(F.col('synonym_title') != 'methyl(1r,10s,11r,12r,19r)-11-acetyloxy-12-ethyl-4-[(13s,15r,17s)-17-ethyl-17-hydroxy-13-methoxycarbonyl-1,11-diazatetracyclo[13.3.1.04,12.05,10]nonadeca-4(12),5,7,9-tetraen-13-yl]-10-hydroxy-5-methoxy-8-methyl-8,16-diazapentacyclo[10.6.1.01,9.02,7.016,19]nonadeca-2,4,6,13-tetraene-10-carboxylate')
 
     # Tira dos sinônimos as linhas que contêm nome duplicado (sinônimo = nome), junta o tipo NER na tabela.
     synonyms = synonyms\
@@ -408,7 +407,7 @@ if __name__ == '__main__':
     #####################################################################
 
     # Carrega os abstracts e salva como uma tabela (filename | id | summary), cada linha representa um artigo.
-    cleaned_documents = dataframes_from_txt('./results_aggregated')
+    cleaned_documents = dataframes_from_txt(AGGREGATED_RESULTS_PATH)
     print('Abstracts originais:')
     cleaned_documents.show(truncate=False)
 
@@ -468,7 +467,7 @@ if __name__ == '__main__':
 
     # Troca os sinônimos pelos termos normalizados.
     matched_synonyms = df\
-        .where(F.col('synonym_title').isNotNull)\
+        .where(F.col('synonym_title').isNotNull())\
         .select(F.col('synonym'), F.col('synonym_title'))\
         .distinct()\
         .where(F.col('synonym') != F.col('synonym_title'))
@@ -490,7 +489,7 @@ if __name__ == '__main__':
     # Escreve os .csv.
     print('Escrevendo csv')
     to_csv(df, target_folder=CLEAN_PAPERS_PATH)
-    to_csv(matched_synonyms, target_folder=MATCHED_SYNONYMS_PATH)
 
     df.printSchema()
     print('END!')
+    exit(0) # ADAPTANDO ATÉ AQUI! -------------------------------------------------------------------------------

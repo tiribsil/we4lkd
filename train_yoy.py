@@ -23,6 +23,7 @@ from pathlib import Path
 from os import listdir
 import pandas as pd
 import numpy as np
+from target_disease import target_disease, folder_name
 
 def list_from_txt(file_path):
     '''Creates a list of itens based on a .txt file, each line becomes an item.
@@ -64,21 +65,21 @@ if __name__ == '__main__':
     print('Starting script')
 
     # CONSTANTS:
-    MODEL_TYPE = 'ft' # 'w2v' for Word2Vec or 'ft' for FastText
+    MODEL_TYPE = 'w2v' # 'w2v' for Word2Vec or 'ft' for FastText
     if MODEL_TYPE == 'w2v':
-        os.makedirs('./models_yoy_combination15/', exist_ok=True)
-        os.makedirs('./models_yoy_combination2/', exist_ok=True)
+        os.makedirs(f'./data/{folder_name}/w2v/models_yoy_combination15/', exist_ok=True)
+        os.makedirs(f'./data/{folder_name}w2v/models_yoy_combination2/', exist_ok=True)
 
         parameters_combination = [[100, 0.0025, 10], [200, 0.025, 15]]
     
     else:
-        os.makedirs('../fasttext/models_yoy_combination16/', exist_ok=True)
+        os.makedirs(f'./data/{folder_name}/models_yoy_combination16/', exist_ok=True)
 
         parameters_combination = [[300, 0.0025, 5]]
 
     # leitura do arquivo .csv em um DataFrame:
     print('Reading DataFrame of papers')
-    df = pd.read_csv('/data/ac4mvvb/WE4LKD-leukemia_w2v/pubchem/results_pandas.csv', escapechar='\\')
+    df = pd.read_csv(f'./data/{folder_name}/clean_results/results_pandas.csv', escapechar='\\')
 
     # todos os anos de publicação (sem repetição) presentes no arquivo .csv:
     years = sorted(df.filename.unique().tolist())

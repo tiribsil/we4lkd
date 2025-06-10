@@ -1,12 +1,11 @@
 import os, string
 from pathlib import Path
 
-from target_disease import target_disease
+from target_disease import folder_name
 
 if __name__ == '__main__':
-    folder_name = target_disease.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
-    source_path = f'./data/raw_results/{folder_name}/'
-    destination_path = f'./data/aggregated_results/{folder_name}/'
+    source_path = f'./data/{folder_name}/raw_results'
+    destination_path = f'./data/{folder_name}/aggregated_results'
 
     # Pega os nomes de todos os arquivos que vieram do crawler.
     filenames = sorted(list(map(str, Path(source_path).glob('*.txt'))))
@@ -37,7 +36,7 @@ if __name__ == '__main__':
                 abstracts.extend(infile.readlines())
 
         # Junta tudo em um só arquivo texto.
-        output_file = Path(destination_path) / f'results_file_{start_year}_{year}.txt'
+        output_file = f'{destination_path}/results_file_{start_year}_{year}.txt'
         with open(output_file, 'w', encoding='utf-8') as f:
             for fname, abstract in zip(filenames, abstracts):
-                f.write(f"{Path(fname).stem[5:]}|{abstract}")
+                f.write(f"{Path(fname).stem[5:]}|{abstract}\n")

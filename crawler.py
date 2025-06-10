@@ -4,7 +4,7 @@ from Bio import Entrez
 from pathlib import Path
 from google import genai
 from api_key import MY_API_KEY
-from target_disease import target_disease
+from target_disease import target_disease, folder_name
 from lark import Lark, LarkError
 
 def list_from_txt(file_path):
@@ -132,16 +132,15 @@ def normalize_disease_name(disease):
     return response.text
 
 if __name__ == '__main__':
-    DESTINATION_DIR = './data/raw_results/'
-    DOWNLOADED_PAPERS_IDS_FILE = './data/ids.txt'
+    DESTINATION_DIR = f'./data/{folder_name}/raw_results'
+    DOWNLOADED_PAPERS_IDS_FILE = f'./data/{folder_name}/ids.txt'
 
     # Cria uma query com termos de busca relevantes.
-    # target_disease = 'acute myeloid leukemia' # input('Enter a target disease: ')
+    # target_disease = input('Enter a target disease: ')
     # target_disease = normalize_disease_name(target_disease)
     query = generate_query(target_disease)
     print(f'Query: {query}')
     paper_counter = 0
-    exit(0)
 
     # Cria uma lista com os IDs de todos os artigos já obtidos e um conjunto de IDs de artigos obtidos.
     old_papers = list_from_txt(DOWNLOADED_PAPERS_IDS_FILE)
@@ -167,10 +166,6 @@ if __name__ == '__main__':
 
     # Pega os detalhes de cada artigo novo.
     papers = fetch_details(id_list)
-
-    # Cria uma pasta com o nome da doença, formatado para poder ser nome de pasta.
-    folder_name = target_disease.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
-    Path(DESTINATION_DIR + '{}'.format(folder_name)).mkdir(parents=True, exist_ok=True)
 
     # Para cada artigo novo...
     for paper in papers['PubmedArticle']:
@@ -198,11 +193,11 @@ if __name__ == '__main__':
         if len(article_year) != 4: continue
 
         # O nome do arquivo será {ano}_{nome_do_artigo}...
-        filename = '{}_{}'.format(article_year, article_title_filename)
+        filename = f'{article_year}_{article_title_filename}'
         if len(filename) > 150: filename = filename[0:146]
 
         # e vai ser escrito naquela pasta criada antes do loop.
-        path_name = DESTINATION_DIR + folder_name + '/{}.txt'.format(filename)
+        path_name = f'{DESTINATION_DIR}/{filename}.txt'
         path_name = path_name.encode('ascii', 'ignore').decode('ascii')
 
         # Escreve o arquivo.
