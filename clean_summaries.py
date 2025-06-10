@@ -111,6 +111,33 @@ def to_csv(df, target_folder, num_files=1, sep=','):
         .format('csv')\
         .save(target_folder)
 
+
+def rename_csv_in_folder(directory: str, new_filename: str):
+    try:
+        # Cria um objeto Path para o diretório
+        p = Path(directory)
+        if not p.is_dir():
+            print(f"Erro: O diretório '{directory}' não foi encontrado.")
+            return
+
+        # Encontra o primeiro arquivo .csv de forma eficiente
+        csv_file = next(p.glob('*.csv'), None)
+
+        if csv_file:
+            # O novo caminho será dentro do mesmo diretório, mas com o novo nome
+            destination_path = csv_file.with_name(new_filename)
+
+            print(f"Arquivo encontrado: '{csv_file.name}'")
+            print(f"Renomeando para: '{destination_path}'")
+
+            # Renomeia o arquivo
+            csv_file.rename(destination_path)
+        else:
+            print(f"Aviso: Nenhum arquivo .csv foi encontrado no diretório '{directory}'.")
+
+    except Exception as e:
+        print(f"Ocorreu um erro inesperado: {e}")
+
 def get_wordnet_pos(treebank_tag):
     """Returns WORDNET POS compliance to WORDNET lemmatization (ADJ, VERB, NOUN, ADV)"""
 
@@ -489,6 +516,7 @@ if __name__ == '__main__':
     # Escreve os .csv.
     print('Escrevendo csv')
     to_csv(df, target_folder=CLEAN_PAPERS_PATH)
+    rename_csv_in_folder(CLEAN_PAPERS_PATH, 'clean_results.csv')
 
     df.printSchema()
     print('END!')
