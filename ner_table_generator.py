@@ -69,7 +69,7 @@ def process_abstracts_from_files(nlp_model):
 
     ner_results = []
     texts_to_process_batch = []
-    batch_size = 500  # Ajuste conforme necessário para otimizar uso de memória/velocidade
+    batch_size = 500
 
     for file_path_str in filenames_to_process:
         file_path = Path(file_path_str)
