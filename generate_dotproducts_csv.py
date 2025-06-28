@@ -1,9 +1,11 @@
 ##################################################
-## Generates the csv files containig the dot product between compounds' embeddings and 'AML'.
+## Generates the csv files containing the dot product between the embeddings for all compounds in the corpus and the target disease's.
 ##################################################
 
 # IMPORTS:
 import os, torch, sys, shutil
+import re
+
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 from pyspark.context import SparkContext
@@ -48,6 +50,7 @@ def get_token_embedding(word, embedding_matrix, method='mean'):
     Returns:
         A torch tensor of 768 dimensions representing the token embedding.
     """
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext")
 
     vocab_ids = []
     tokenized_word = tokenizer.tokenize(word)
@@ -74,7 +77,7 @@ def get_token_embedding(word, embedding_matrix, method='mean'):
 def generate_compound_historical_record(compound):
     for method in ['first', 'last', 'mean']:
         bert_embeddings_files = sorted(
-            [f.path for f in os.scandir(VALIDATION_FOLDER) if f.name.endswith('.pt') and method in f.name])
+            [f.path for f in os.scandir(f'./{folder_name}/validation/bert/') if f.name.endswith('.pt') and method in f.name])
 
         compound_dict = {
             'year': [],
@@ -82,9 +85,9 @@ def generate_compound_historical_record(compound):
             'dot_product_result_absolute': [],
             'softmax': [],
             'normalized_dot_product_absolute': [],
-            'standartized_dot_product_absolute': [],
+            'standardized_dot_product_absolute': [],
             'softmax_normalization': [],
-            'softmax_standartization': [],
+            'softmax_standardization': [],
         }
 
         for be in bert_embeddings_files:
@@ -121,67 +124,73 @@ def generate_compound_historical_record(compound):
                                                             compound_dict['dot_product_result_absolute']]
         compound_dict['softmax_normalization'] = softmax(compound_dict['normalized_dot_product_absolute'])
 
-        # Standartization:
-        # compound_dict['softmax_standartization'] = preprocessing.scale(compound_dict['dot_product_result_absolute'])
+        # Standardization:
+        # compound_dict['softmax_standardization'] = preprocessing.scale(compound_dict['dot_product_result_absolute'])
         mean = np.mean(compound_dict['dot_product_result_absolute'])
-        standart_deviation = np.std(compound_dict['dot_product_result_absolute'])
-        compound_dict['standartized_dot_product_absolute'] = [(x - mean) / standart_deviation for x in
+        standard_deviation = np.std(compound_dict['dot_product_result_absolute'])
+        compound_dict['standardized_dot_product_absolute'] = [(x - mean) / standard_deviation for x in
                                                               compound_dict['dot_product_result_absolute']]
-        compound_dict['softmax_standartization'] = softmax(compound_dict['standartized_dot_product_absolute'])
+        compound_dict['softmax_standardization'] = softmax(compound_dict['standardized_dot_product_absolute'])
 
         print("Writing compound's historical record .csv file, method {}".format(method))
         pd.DataFrame.from_dict(data=compound_dict).to_csv(
             './validation/per_compound/bert/{}_{}.csv'.format(compound, method),
             columns=['year', 'dot_product_result', 'dot_product_result_absolute', 'softmax',
-                     'normalized_dot_product_absolute', 'standartized_dot_product_absolute', 'softmax_normalization',
-                     'softmax_standartization'], index=False)
+                     'normalized_dot_product_absolute', 'standardized_dot_product_absolute', 'softmax_normalization',
+                     'softmax_standardization'], index=False)
 
 
 def get_w2v_output_embedding(word, model, method):
     """ Returns the output embedding of a given word from Word2Vec or FastText model.
+        Updated for Gensim 4.0.0+.
 
     Args:
         word: the token in model's vocabulary that you want the output embedding;
-        meodel: Word2Vec or FastText model object;
+        model: Word2Vec or FastText model object;
         method: how to access the output embedding:
-            'da': direct access to the token (i.e., model.wv[word]) if it exists in the vocabulary;
-            'avg': compute the average of all words in vocabulary that contains word as a substring.
+            'da': direct access to the token (i.e., model.wv[word]) if it exists in the vocabulary.
+                  If not, it searches for the first token in the vocabulary that contains 'word' as a substring.
+            'avg': compute the average of all words in vocabulary that contains 'word' as a substring.
     """
-
     if method == 'da':
-        index_of_word_in_vocab = 0
+        # Tenta o acesso direto, que é a forma mais limpa e rápida.
+        if word in model.wv.key_to_index:
+            return model.wv[word]
 
-        try:
-            index_of_word_in_vocab = list(model.wv.vocab).index(word)
-        except:
-            words = [x for x in list(model.wv.vocab) if word in x]
-            if len(words) > 0:
-                index_of_word_in_vocab = list(model.wv.vocab).index(words[0])
+        # Se falhar, busca pela primeira palavra que contém 'word' como substring.
+        # Iteramos sobre a lista de chaves (palavras) do vocabulário.
+        for key in model.wv.index_to_key:
+            if word in key:
+                # Retorna o vetor da primeira correspondência encontrada.
+                return model.wv[key]
 
-        return model.wv.vectors[index_of_word_in_vocab]
+        # Se nenhuma correspondência for encontrada, retorna None ou um vetor de zeros.
+        # Isso evita que o programa quebre se a palavra não for encontrada de forma alguma.
+        # A escolha depende de como o código que chama esta função lida com falhas.
+        # Retornar None é mais explícito.
+        # Se precisar de um vetor, use np.zeros(model.vector_size)
+        return None
 
     elif method == 'avg':
-        tokens_contaning_the_word = [x for x in list(model.wv.vocab) if word in x]
+        # Encontra todas as palavras no vocabulário que contêm 'word' como substring.
+        tokens_containing_the_word = [key for key in model.wv.index_to_key if word in key]
 
-        if len(tokens_contaning_the_word) == 1:
-            return model.wv.vectors[list(model.wv.vocab).index(tokens_contaning_the_word[0])]
+        if not tokens_containing_the_word:
+            # Se a lista estiver vazia, nenhuma palavra contém a substring.
+            # Retorna None ou um vetor de zeros.
+            return None
 
-        else:
-            indexes_of_tokens_contaning_the_word = []
-            for w in tokens_contaning_the_word:
-                indexes_of_tokens_contaning_the_word.append(list(model.wv.vocab).index(w))
+        # Coleta os vetores de todas as palavras correspondentes.
+        # O acesso model.wv[tokens_containing_the_word] já retorna uma matriz numpy dos vetores.
+        # É muito mais eficiente do que um loop.
+        output_embeddings = model.wv[tokens_containing_the_word]
 
-            print(len(tokens_contaning_the_word))
-            print(len(indexes_of_tokens_contaning_the_word))
+        # Calcula a média ao longo do eixo 0 (a média dos vetores).
+        return np.mean(output_embeddings, axis=0)
 
-            output_embeddings = []
-            for idx in indexes_of_tokens_contaning_the_word:
-                output_embeddings.append(model.wv.vectors[idx])
-
-            print(len(output_embeddings))
-            print(type(output_embeddings[0]))
-            return np.mean(
-                np.stack([output_embeddings]).reshape((len(output_embeddings), output_embeddings[0].shape[0])), axis=0)
+    else:
+        # Lida com um métod inválido, se necessário.
+        raise ValueError(f"Método '{method}' inválido. Escolha 'da' ou 'avg'.")
 
 
 def get_compounds():
@@ -194,55 +203,45 @@ if __name__ == '__main__':
 
     all_compounds_from_ner = get_compounds()
 
-    # CONSTANTS:
-    VALIDATION_TYPE = 'w2v'  # possible values must be: 'bert', 'w2v', or 'ft'
-    W2V_MODELS_COMB15_PATH = f'./data/{folder_name}/w2v/models_yoy_combination15/'
-    FT_MODELS_COMB16_PATH = f'./data/{folder_name}/fasttext/models_yoy_combination16/'
+    VALIDATION_TYPE = 'w2v'  # must be either 'w2v' or 'ft'
+    if VALIDATION_TYPE not in ['w2v', 'ft']:
+        print('Invalid validation type, has to be either "w2v" or "ft".')
+        exit(1)
+    combination = '15' if VALIDATION_TYPE == 'w2v' else '16'
 
+    model_directory_path = f'./data/{folder_name}/{VALIDATION_TYPE}/models_yoy_combination{combination}/'
+    validation_directory_path = f'./data/{folder_name}/validation/per_compound/{VALIDATION_TYPE}/'
+
+    models = sorted([f.path for f in os.scandir(model_directory_path) if f.name.endswith('.model')])
     dictionary_for_all_compounds = {}
 
-    # if the validation is for Word2Vec models, somen constants must pointer to specific Word2Vec files:
-    if VALIDATION_TYPE == 'w2v':
-        MODELS_COMB15 = sorted([f.path for f in os.scandir(W2V_MODELS_COMB15_PATH) if f.name.endswith('.model')])
-        os.makedirs(f'./data/{folder_name}/validation/per_compound/w2v/', exist_ok=True)
+    os.makedirs(validation_directory_path, exist_ok=True)
 
-        for c in all_compounds_from_ner:
-            dictionary_for_all_compounds.update({
-                '{}_comb15'.format(c): {
-                    'year': [],
-                    'dot_product_result': [],
-                    'dot_product_result_absolute': [],
-                    'softmax': [],
-                    'normalized_dot_product_absolute': [],
-                    'standartized_dot_product_absolute': [],
-                    'softmax_normalization': [],
-                    'softmax_standartization': [],
-                }
+    for c in all_compounds_from_ner:
+        dictionary_for_all_compounds.update({
+            f'{c}_comb{combination}': {
+                'year': [],
+                'dot_product_result': [],
+                'dot_product_result_absolute': [],
+                'softmax': [],
+                'normalized_dot_product_absolute': [],
+                'standardized_dot_product_absolute': [],
+                'softmax_normalization': [],
+                'softmax_standardization': [],
             }
-            )
-
-    # if the validation is for FastText models, somen constants must pointer to specific FastText files:
-    elif VALIDATION_TYPE == 'ft':
-        MODELS_COMB16 = sorted([f.path for f in os.scandir(FT_MODELS_COMB16_PATH) if f.name.endswith('.model')])
-        os.makedirs(f'./data/{folder_name}/validation/per_compound/ft/', exist_ok=True)
-
-        for c in all_compounds_from_ner:
-            dictionary_for_all_compounds.update({
-                '{}_comb16'.format(c): {
-                    'year': [],
-                    'dot_product_result': [],
-                    'dot_product_result_absolute': [],
-                    'softmax': [],
-                    'normalized_dot_product_absolute': [],
-                    'standartized_dot_product_absolute': [],
-                    'softmax_normalization': [],
-                    'softmax_standartization': [],
-                }
-            }
-            )
+        }
+        )
 
     # list of years which models were trained (the length of this list is the number of models trained):
-    years = sorted([int(x) for x in range(1921, 2025)])
+    years = []
+
+    for file in os.listdir(f'./data/{folder_name}/aggregated_results/'):
+        file_path = f'./data/{folder_name}/aggregated_results/{file}'
+
+        filename, extension = os.path.splitext(file_path)
+        years.append(int(filename[-4:]))
+
+    years = sorted(years)
 
     ########################
     # DEBUGGING:
@@ -251,52 +250,33 @@ if __name__ == '__main__':
     ########################
 
     # Step 1: access the token embedding of each compound after it appears for the first time in the corpus and save it into a .pt file
-    for index_y, y in enumerate(years):
-        print('\nCurrent year of analysis: {}'.format(y))
-
-        if y < 1963:
-            print(
-                "There are no papers published until {} that contains the word 'AML', mandatory for the validation process".format(
-                    y))
-            continue
-
-        print("There are at least one paper published until {} that cotains the word 'AML'".format(y))
-
-        compounds_present_in_the_papers = []
-        for key, value in FIRST_OCCURRENCE_OF_EACH_COMPOUND.items():
-            if y >= value:
-                compounds_present_in_the_papers.append(key)
-
-        # step (3):
-        if len(compounds_present_in_the_papers) <= 0:
-            print('There are no papers published until {} that contains any of the target compounds'.format(y))
-            continue
-
-        print('There are at least one paper published until {} that contains any of the target compounds'.format(y))
-        print('The compounds present in the selected papers are:')
-        print(compounds_present_in_the_papers)
+    for y in years:
+        print(f'\nCurrent year of analysis: {y}')
 
         if VALIDATION_TYPE == 'w2v':
             # loading Word2Vec model from file:
             print('Loading Word2Vec model')
-            model_comb15 = Word2Vec.load([x for x in MODELS_COMB15 if str(y) in x][0])
+            model_comb15 = Word2Vec.load([x for x in models if str(y) in x][0])
 
             # accessing the word embedding of AML:
             try:
-                AML_we_comb15 = model_comb15.wv['aml']
-                print("Acessing the word embedding of 'AML'")
+                target_disease_we = model_comb15.wv[folder_name]
+                print(f"Accessing the word embedding of '{folder_name}'")
 
             except:
-                print('AML is not in the vocabulary')
+                print('Target disease is not in the vocabulary')
                 continue
 
-            # acessing the output embedding of each of the compounds present in the papers published until year y:
-            for compound in compounds_present_in_the_papers:
+            # accessing the output embedding of each of the compounds present in the papers published until year y:
+            for compound in all_compounds_from_ner:
                 # METHOD 1: Direct Access to the token in the model's vocab
-                print('Acessing the output embedding of {}'.format(compound))
+                print('Accessing the output embedding of {}'.format(compound))
                 compound_we_comb15 = get_w2v_output_embedding(compound, model_comb15, method='da')
+                if compound_we_comb15 is None:
+                    print(f"Compound '{compound}' not found in the model's vocabulary.")
+                    continue
 
-                dot_product_comb15 = np.dot(compound_we_comb15, AML_we_comb15).item()
+                dot_product_comb15 = np.dot(compound_we_comb15, target_disease_we).item()
 
                 dictionary_for_all_compounds['{}_comb15'.format(compound)]['year'].append(y)
                 dictionary_for_all_compounds['{}_comb15'.format(compound)]['dot_product_result'].append(
@@ -307,23 +287,26 @@ if __name__ == '__main__':
         elif VALIDATION_TYPE == 'ft':
             # loading FastText model from file:
             print('Loading FastText model')
-            model_comb16 = FastText.load([x for x in MODELS_COMB16 if str(y) in x][0])
+            model_comb16 = FastText.load([x for x in models if str(y) in x][0])
 
             # accessing the word embedding of AML:
             try:
-                AML_we_comb16 = model_comb16.wv['aml']
-                print("Acessing the word embedding of 'AML'")
+                target_disease_we = model_comb16.wv[folder_name]
+                print(f"Accessing the word embedding of '{folder_name}'")
 
             except:
-                print('AML is not in the vocabulary')
+                print('Target disease is not in the vocabulary')
                 continue
 
-            # acessing the output embedding of each of the compounds present in the papers published until year y:
-            for compound in compounds_present_in_the_papers:
-                print('Acessing the output embedding of {}'.format(compound))
+            # accessing the output embedding of each of the compounds present in the papers published until year y:
+            for compound in all_compounds_from_ner:
+                print('Accessing the output embedding of {}'.format(compound))
                 compound_we_comb16 = get_w2v_output_embedding(compound, model_comb16, method='da')
+                if compound_we_comb16 is None:
+                    print(f"Compound '{compound}' not found in the model's vocabulary.")
+                    continue
 
-                dot_product_comb16 = np.dot(compound_we_comb16, AML_we_comb16).item()
+                dot_product_comb16 = np.dot(compound_we_comb16, target_disease_we).item()
 
                 dictionary_for_all_compounds['{}_comb16'.format(compound)]['year'].append(y)
                 dictionary_for_all_compounds['{}_comb16'.format(compound)]['dot_product_result'].append(
@@ -331,76 +314,71 @@ if __name__ == '__main__':
                 dictionary_for_all_compounds['{}_comb16'.format(compound)][
                     'dot_product_result_absolute'].append(abs(dot_product_comb16))
 
+    print('Generating historical record for each compound')
+    for c in all_compounds_from_ner:
+        key = f'{c}_comb{combination}'
+        key_filename = re.sub(r'[\\/*?:"<>|]', '_', key)
 
+        # Verifique se a chave existe e se os dados não estão vazios antes de processar
+        if key not in dictionary_for_all_compounds:
+            print(f"Aviso: Chave '{key}' não encontrada no dicionário. Pulando.")
+            continue
 
+        # Pega a lista de produtos escalares para facilitar o acesso
+        dot_products_abs = dictionary_for_all_compounds[key]['dot_product_result_absolute']
 
-    if VALIDATION_TYPE == 'w2v':
-        print('Generating historical record for each compound')
-        for c in all_compounds_from_ner:
-            for comb in ['comb15']:
-                key = '{}_{}'.format(c, comb)
+        # --- VERIFICAÇÃO PRINCIPAL: Garante que a lista de dados não está vazia ---
+        if not dot_products_abs:
+            print(f"Aviso: Lista de dados para '{key}' está vazia. Pulando cálculos.")
+            # Opcional: Você pode querer escrever um CSV vazio ou simplesmente pular
+            # Aqui, vamos pular a escrita do arquivo para evitar arquivos vazios.
+            continue
 
-                # Softmax:
-                dictionary_for_all_compounds[key]['softmax'] = softmax(
-                    dictionary_for_all_compounds[key]['dot_product_result_absolute'])
+        # --- Cálculos com segurança ---
 
-                # Normalization:
-                maximum = np.max(dictionary_for_all_compounds[key]['dot_product_result_absolute'])
-                dictionary_for_all_compounds[key]['normalized_dot_product_absolute'] = [x / maximum for x in
-                                                                                        dictionary_for_all_compounds[
-                                                                                            key][
-                                                                                            'dot_product_result_absolute']]
-                dictionary_for_all_compounds[key]['softmax_normalization'] = softmax(
-                    dictionary_for_all_compounds[key]['normalized_dot_product_absolute'])
+        # Softmax:
+        # A verificação 'if not dot_products_abs:' já previne o erro aqui.
+        dictionary_for_all_compounds[key]['softmax'] = softmax(dot_products_abs)
 
-                # Standartization:
-                mean = np.mean(dictionary_for_all_compounds[key]['dot_product_result_absolute'])
-                standart_deviation = np.std(dictionary_for_all_compounds[key]['dot_product_result_absolute'])
-                dictionary_for_all_compounds[key]['standartized_dot_product_absolute'] = [
-                    (x - mean) / standart_deviation for x in
-                    dictionary_for_all_compounds[key]['dot_product_result_absolute']]
-                dictionary_for_all_compounds[key]['softmax_standartization'] = softmax(
-                    dictionary_for_all_compounds[key]['standartized_dot_product_absolute'])
+        # Normalization:
+        maximum = np.max(dot_products_abs)
+        if maximum > 0:
+            normalized_values = [x / maximum for x in dot_products_abs]
+            dictionary_for_all_compounds[key]['normalized_dot_product_absolute'] = normalized_values
+            dictionary_for_all_compounds[key]['softmax_normalization'] = softmax(normalized_values)
+        else:
+            # Lida com o caso em que todos os valores são 0, evitando divisão por zero.
+            dictionary_for_all_compounds[key]['normalized_dot_product_absolute'] = [0.0] * len(dot_products_abs)
+            dictionary_for_all_compounds[key]['softmax_normalization'] = softmax([0.0] * len(dot_products_abs))
 
-                print('Writing file {}.csv'.format(key))
-                pd.DataFrame.from_dict(data=dictionary_for_all_compounds[key]).to_csv(
-                    './validation/per_compound/w2v/{}.csv'.format(key),
-                    columns=['year', 'dot_product_result', 'dot_product_result_absolute', 'softmax',
-                             'normalized_dot_product_absolute', 'standartized_dot_product_absolute',
-                             'softmax_normalization', 'softmax_standartization'], index=False)
+        # Standardization:
+        # A padronização requer pelo menos 2 pontos para ter um desvio padrão > 0.
+        if len(dot_products_abs) > 1:
+            mean = np.mean(dot_products_abs)
+            standard_deviation = np.std(dot_products_abs)
 
-    elif VALIDATION_TYPE == 'ft':
-        print('Generating historical record for each compound')
-        for c in all_compounds_from_ner:
-            key = '{}_comb16'.format(c)
+            if standard_deviation > 0:
+                standardized_values = [(x - mean) / standard_deviation for x in dot_products_abs]
+                dictionary_for_all_compounds[key]['standardized_dot_product_absolute'] = standardized_values
+                dictionary_for_all_compounds[key]['softmax_standardization'] = softmax(standardized_values)
+            else:
+                # Caso raro em que todos os valores são idênticos, o desvio padrão é 0.
+                dictionary_for_all_compounds[key]['standardized_dot_product_absolute'] = [0.0] * len(dot_products_abs)
+                dictionary_for_all_compounds[key]['softmax_standardization'] = softmax([0.0] * len(dot_products_abs))
+        else:
+            # Se houver apenas um valor, a padronização não é significativa (resultaria em desvio padrão 0).
+            dictionary_for_all_compounds[key]['standardized_dot_product_absolute'] = [0.0]
+            dictionary_for_all_compounds[key]['softmax_standardization'] = softmax([0.0])
 
-            # Softmax:
-            dictionary_for_all_compounds[key]['softmax'] = softmax(
-                dictionary_for_all_compounds[key]['dot_product_result_absolute'])
+        print(f'Writing file for {key}')
+        pd.DataFrame.from_dict(data=dictionary_for_all_compounds[key]).to_csv(
+            f'{validation_directory_path}/{key_filename}.csv',
+            columns=['year', 'dot_product_result', 'dot_product_result_absolute', 'softmax',
+                     'normalized_dot_product_absolute', 'standardized_dot_product_absolute',
+                     'softmax_normalization', 'softmax_standardization'],
+            index=False
+        )
 
-            # Normalization:
-            maximum = np.max(dictionary_for_all_compounds[key]['dot_product_result_absolute'])
-            dictionary_for_all_compounds[key]['normalized_dot_product_absolute'] = [x / maximum for x in
-                                                                                    dictionary_for_all_compounds[key][
-                                                                                        'dot_product_result_absolute']]
-            dictionary_for_all_compounds[key]['softmax_normalization'] = softmax(
-                dictionary_for_all_compounds[key]['normalized_dot_product_absolute'])
-
-            # Standartization:
-            mean = np.mean(dictionary_for_all_compounds[key]['dot_product_result_absolute'])
-            standart_deviation = np.std(dictionary_for_all_compounds[key]['dot_product_result_absolute'])
-            dictionary_for_all_compounds[key]['standartized_dot_product_absolute'] = [(x - mean) / standart_deviation
-                                                                                      for x in
-                                                                                      dictionary_for_all_compounds[key][
-                                                                                          'dot_product_result_absolute']]
-            dictionary_for_all_compounds[key]['softmax_standartization'] = softmax(
-                dictionary_for_all_compounds[key]['standartized_dot_product_absolute'])
-
-            print('Writing file {}.csv'.format(key))
-            pd.DataFrame.from_dict(data=dictionary_for_all_compounds[key]).to_csv(
-                './validation/per_compound/ft/{}.csv'.format(key),
-                columns=['year', 'dot_product_result', 'dot_product_result_absolute', 'softmax',
-                         'normalized_dot_product_absolute', 'standartized_dot_product_absolute',
-                         'softmax_normalization', 'softmax_standartization'], index=False)
+    # OSError: Cannot save file into a non-existent directory: 'data/acute_myeloid_leukemia/validation/per_compound/w2v/chemotherapy'
 
     print('END!')
