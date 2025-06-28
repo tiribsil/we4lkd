@@ -203,7 +203,7 @@ if __name__ == '__main__':
 
     all_compounds_from_ner = get_compounds()
 
-    VALIDATION_TYPE = 'w2v'  # must be either 'w2v' or 'ft'
+    VALIDATION_TYPE = 'ft'  # must be either 'w2v' or 'ft'
     if VALIDATION_TYPE not in ['w2v', 'ft']:
         print('Invalid validation type, has to be either "w2v" or "ft".')
         exit(1)
@@ -212,10 +212,11 @@ if __name__ == '__main__':
     model_directory_path = f'./data/{folder_name}/{VALIDATION_TYPE}/models_yoy_combination{combination}/'
     validation_directory_path = f'./data/{folder_name}/validation/per_compound/{VALIDATION_TYPE}/'
 
+    os.makedirs(model_directory_path, exist_ok=True)
+    os.makedirs(validation_directory_path, exist_ok=True)
+
     models = sorted([f.path for f in os.scandir(model_directory_path) if f.name.endswith('.model')])
     dictionary_for_all_compounds = {}
-
-    os.makedirs(validation_directory_path, exist_ok=True)
 
     for c in all_compounds_from_ner:
         dictionary_for_all_compounds.update({

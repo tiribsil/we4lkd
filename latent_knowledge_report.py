@@ -1,324 +1,207 @@
 ##################################################
-## Generates a LaTex file containing the historical plots of each compound, for each embeddings approach, and each algebric operation applied on data (normalization, standartization, softmax).
-##################################################
-## Author: Matheus Vargas Volpon Berto
-## Copyright: Copyright 2022, Discovering Latent Knowledge in medical paper on Acute Myeloid Leukemia
-## Email: matheusvvb@hotmail.com
+## Generates a LaTeX file containing the historical plots of each selected CHEMICAL,
+## showing the evolution of its semantic relationship with the target disease.
 ##################################################
 
 # IMPORTS:
-import os, jinja2, re, math
+import os
+import jinja2
+import re
 import pandas as pd
-import numpy as np
-from gensim import models
-from gensim.models import Word2Vec, FastText
 from matplotlib import pyplot as plt
-from jinja2 import Template
 from datetime import date
-import tikzplotlib
 from tikzplotlib import get_tikz_code
-from itertools import repeat
 
-sys.path.append('./pubchem/')
-from clean_summaries import get_target_compounds
-from generates_dotproducts_csv import get_w2v_output_embedding
+from target_disease import target_disease, folder_name
 
-
-# FUNCTIONS:
-def get_dot_products_plot_BERT(folder_path, column='dot_product_result_absolute'):
-    """Plots a historical record for the selected compounds.
+def select_top_n_chemicals(csv_files, top_n=20, metric='dot_product_result_absolute'):
+    """
+    Lê uma lista de arquivos CSV (um por CHEMICAL) e seleciona os 'top_n' mais
+    relevantes com base no valor máximo de uma métrica.
 
     Args:
-        compounds: the name of the compounds to be plotted;
-        folder_path: a list of filenames;
-        column: the column to be historically plotted. The possbile values are:
-            dot_product_result
-            dot_product_result_absolute
-            softmax
-            normalized_dot_product_absolute
-            standartized_dot_product_absolute
-            softmax_normalization
-            softmax_standartization
+        csv_files (list): Lista de caminhos para os arquivos CSV.
+        top_n (int): O número de CHEMICALS a serem selecionados.
+        metric (str): A coluna a ser usada para o ranqueamento (e.g., o produto escalar máximo).
+
+    Returns:
+        list: Uma lista dos 'top_n' caminhos de arquivos CSV mais relevantes.
     """
-
-    compounds = get_target_compounds()
-    latent_knowledge_compounds = []
-    indexes_to_put_marker = []
-
-    temporal = {
-        'compound': [],
-        'year': [],
-        column: [],
-    }
-
-    for c in folder_path:
-        compound = c.split('.csv')[0].split('/')[-1].split('_')[0]
-
-        df = pd.read_csv(c)
-        values = df[column].tolist()
-
-        if len(values) < 60:
-            first_year = df['year'].to_list()[0]
-            # last_year = df['year'].to_list()[-1]
-
-            if first_year != 1963:
-                values = list(repeat(None, first_year - 1963)) + values
-
-            # if last_year != 2022: # remover isso quando irpara produção
-            # values = values + list(repeat(None, 2022 - last_year))
-
-        temporal['compound'].extend([compound] * 60)
-        temporal['year'].extend([x for x in range(1963, 2023)])
-        temporal[column].extend(values)
-
-    temporal_df = pd.DataFrame.from_dict(temporal)
-
-    dfs = []
-    for c in compounds:
-        df_aux = temporal_df[temporal_df['compound'] == c]
-        dfs.append(df_aux)
-
+    scores = []
+    for file_path in csv_files:
         try:
-            df_aux.dropna(inplace=True)
-            indexes_to_put_marker.append(df_aux['year'].to_list().index(int(timeline[c])) + 1)
+            df = pd.read_csv(file_path)
+            if not df.empty and metric in df.columns:
+                # Extrai o nome do CHEMICAL do caminho do arquivo
+                chemical_name = os.path.basename(file_path).split('_comb')[0]
+                max_score = df[metric].max()
+                scores.append((max_score, file_path, chemical_name))
+        except (pd.errors.EmptyDataError, FileNotFoundError) as e:
+            print(f"Aviso: Não foi possível ler ou o arquivo está vazio: {file_path}. Erro: {e}")
+            continue
 
-        except:
-            indexes_to_put_marker.append(None)
+    # Ordena a lista de scores em ordem decrescente
+    scores.sort(key=lambda x: x[0], reverse=True)
 
-    # print(indexes_to_put_marker)
-    fig, axs = plt.subplots(int(len(compounds) / 2) + 1, 2, sharex='all', figsize=(20, 30))
+    # Imprime os top N selecionados para verificação
+    print(f"\n--- Top {top_n} CHEMICALS selecionados pela métrica '{metric}' (valor máximo) ---")
+    for score, _, name in scores[:top_n]:
+        print(f"{name}: {score:.4f}")
+    print("----------------------------------------------------------------------\n")
 
-    i = 0
-    for row in range(0, int(len(compounds) / 2) + 1):
-        for col in range(0, 2):
-            if i >= len(compounds):
-                break
+    # Retorna apenas os caminhos dos arquivos dos top N
+    return [file_path for _, file_path, _ in scores[:top_n]]
 
-            if i == len(compounds) - 2:
-                axs[row, col].tick_params(axis='x', labelbottom=True)
 
-            dp_values = dfs[i][column].to_list()
-            marker_on = [False for x in range(1963, 2023)]
-            for index, y in enumerate(range(1963, 2023)):
-                if str(y) == str(timeline[compounds[i]]):
-                    marker_on[index] = True
+def generate_historical_plots(csv_files_to_plot, column_to_plot, year_range=(1963, 2023)):
+    """
+    Gera um conjunto de gráficos históricos e retorna o código Ti*k*Z correspondente.
+    Esta função foi refatorada para ser mais clara e remover a lógica da 'timeline'.
 
-            """
-            for index_dp, dp in enumerate(dp_values):
-                try:
-                    if math.isnan(dp) == False and index_dp < int(timeline[compounds[i]]) and dp > dp_values[marker_on.index(True)]:
-                        print('{} is bigger than {}'.format(dp, dp_values[marker_on.index(True)]))
-                        latent_knowledge_compounds.append(compounds[i])
-                        break
-                except:
-                    continue
-            """
+    Args:
+        csv_files_to_plot (list): Lista de caminhos para os arquivos CSV a serem plotados.
+        column_to_plot (str): O nome da coluna a ser usada para o eixo Y dos gráficos.
+        year_range (tuple): O intervalo de anos (início, fim) para o eixo X.
 
-            axs[row, col].plot('year', column, data=dfs[i])
-            # axs[row].set_xlabel('Years')
-            # axs[row].set_ylabel(' '.join(column.split('_')).capitalize())
-            axs[row, col].grid(visible=True)
+    Returns:
+        str: Uma string contendo o código Ti*k*Z para os gráficos.
+    """
+    # 1. PREPARAÇÃO DOS DADOS PARA PLOTAGEM
+    all_plots_data = []
+    for file_path in csv_files_to_plot:
+        try:
+            df = pd.read_csv(file_path)
+            if not df.empty:
+                # Extrai o nome do CHEMICAL (já sanitizado) do nome do arquivo
+                # Isso é mais robusto do que dividir por '/'
+                chemical_name = os.path.basename(file_path).split('_comb')[0].replace('_', ' ')
+                all_plots_data.append({'name': chemical_name, 'data': df})
+        except (pd.errors.EmptyDataError, FileNotFoundError) as e:
+            print(f"Aviso ao plotar: Não foi possível ler ou o arquivo está vazio: {file_path}. Erro: {e}")
 
-            # if compounds[i] in latent_knowledge_compounds:
-            # axs[row, col].set_title(compounds[i].capitalize(), fontdict={'fontweight': 'bold'}, color='red')
+    if not all_plots_data:
+        print("Nenhum dado válido para plotar. Retornando string vazia.")
+        return ""
 
-            # else:
-            # axs[row, col].set_title(compounds[i].capitalize())
-            axs[row, col].set_title(compounds[i].capitalize())
+    # 2. CRIAÇÃO DOS SUBPLOTS COM MATPLOTLIB
+    num_plots = len(all_plots_data)
+    num_cols = 2
+    # Calcula o número de linhas necessário, garantindo que seja um inteiro
+    num_rows = (num_plots + num_cols - 1) // num_cols
 
-            # axs[row].setylim(compounds[i].capitalize())
-            axs[row, col].set_xlim(1962, 2023)
-            axs[row, col].tick_params(axis='x', labelrotation=45)
-            # axs[row, col].tick_params(axis='both', labelbottom=True)
-            axs[row, col].set_xticks([x for x in range(1963, 2023, 3)])
+    fig, axs = plt.subplots(num_rows, num_cols, sharex='all', figsize=(20, 5 * num_rows))
+    # Achatamos a matriz de eixos para facilitar a iteração, caso haja mais de uma linha
+    axs = axs.flatten()
 
-            i = i + 1
+    for i, plot_info in enumerate(all_plots_data):
+        ax = axs[i]
+        df = plot_info['data']
 
-    # plt.tight_layout(h_pad=3)
+        ax.plot(df['year'], df[column_to_plot])
 
-    # plt.xlabel("common X")
-    # plt.ylabel("common Y")
-    axs[int(len(compounds) / 2), 1].set_axis_off()
-    fig.tight_layout(pad=3)
-    fig.supxlabel('Years', y=-0.03, fontsize=24)
-    fig.supylabel(' '.join(column.split('_')).capitalize(), x=-0.03, fontsize=24)
+        ax.set_title(plot_info['name'].capitalize())
+        ax.grid(visible=True)
+        ax.set_xlim(year_range[0] - 1, year_range[1] + 1)
+        ax.tick_params(axis='x', labelrotation=45)
 
-    sep = r"\linewidth/12"
-    latex_string = get_tikz_code(fig,
-                                 axis_width='450',
-                                 axis_height='125',
-                                 extra_axis_parameters=[
-                                     'xtick={1963, 1966, 1969, 1972, 1975, 1978, 1981, 1984, 1987, 1990, 1993, 1996, 1999, 2002, 2005, 2008, 2011, 2014, 2017, 2020},\
-                                     x tick label style={/pgf/number format/1000 sep=},\
-                                     y tick label style={\
-                                             /pgf/number format/fixed,\
-                                             /pgf/number format/precision=15\
-                                     },\
-                                     scaled y ticks=false'],
-                                 extra_groupstyle_parameters={f'horizontal sep={sep}'}
-                                 )
+        # Define os ticks do eixo X a cada 5 anos para não poluir
+        ax.set_xticks([year for year in range(year_range[0], year_range[1] + 1, 5)])
 
-    for lkc in latent_knowledge_compounds:
-        latex_string = re.sub('title={' + lkc.capitalize() + '}',
-                              'title={' + lkc.capitalize() + '},\ntitle style={color=red}', latex_string)
+    # Oculta eixos extras que não foram usados
+    for i in range(num_plots, len(axs)):
+        axs[i].set_axis_off()
 
-    for idx in indexes_to_put_marker:
-        if idx is not None:
-            latex_string = re.sub('\[semithick,[ ]?steelblue31119180\]',
-                                  '[semithick, steelblue31119180, mark=star, mark size=4, mark indices={' + str(
-                                      idx) + '}]', latex_string, count=1)
+    # 3. CONFIGURAÇÃO GERAL E CONVERSÃO PARA TIKZ
+    fig.tight_layout(pad=3.0)
+    fig.supxlabel('Ano de Publicação', y=0.01, fontsize=24)
+    y_label = ' '.join(column_to_plot.split('_')).capitalize()
+    fig.supylabel(f"Relação com '{target_disease.capitalize()}': {y_label}", x=0.01, fontsize=24)
 
-        else:
-            latex_string = re.sub('\[semithick,[ ]?steelblue31119180\]', '[semithick, steelblue31119181]', latex_string,
-                                  count=1)
+    plt.close(fig)  # Fecha a figura para não exibi-la no notebook/script
 
-    latex_string = re.sub('steelblue31119181', 'steelblue31119180', latex_string)
+    # Parâmetros para o Ti*k*Z
+    # Convertemos a tupla de ticks para uma string formatada para Ti*k*Z
+    xtick_str = ','.join(map(str, range(year_range[0], year_range[1] + 1, 5)))
+
+    latex_string = get_tikz_code(
+        fig,
+        axis_width='\\textwidth/2.2',  # Largura relativa para caber duas colunas
+        axis_height='125',
+        extra_axis_parameters=[
+            f'xtick={{{xtick_str}}}',
+            'x tick label style={/pgf/number format/1000 sep=}',
+            'y tick label style={/pgf/number format/fixed, /pgf/number format/precision=2, scaled y ticks=false}'
+        ]
+    )
+
     return latex_string
 
 
-# MAIN PROGRAM:
+# PROGRAMA PRINCIPAL
 if __name__ == '__main__':
     pd.options.mode.chained_assignment = None
-    print('Starting')
+    print('Iniciando a geração do relatório de plots...')
 
-    # Jinja2 settings, commands to use in the .tex template file:
+    # --- Configuração do Jinja2 ---
     latex_jinja_env = jinja2.Environment(
-        block_start_string='\BLOCK{',
-        block_end_string='}',
-        variable_start_string='\VAR{',
-        variable_end_string='}',
-        comment_start_string='\#{',
-        comment_end_string='}',
-        line_statement_prefix='%%',
-        line_comment_prefix='%#',
-        trim_blocks=True,
-        autoescape=False,
+        block_start_string='\BLOCK{', block_end_string='}',
+        variable_start_string='\VAR{', variable_end_string='}',
+        comment_start_string='\#{', comment_end_string='}',
+        line_statement_prefix='%%', line_comment_prefix='%#',
+        trim_blocks=True, autoescape=False,
         loader=jinja2.FileSystemLoader(os.path.abspath('.'))
     )
-
-    # loading template from .tex file:
     template = latex_jinja_env.get_template('./latent_knowledge_template.tex')
 
-    # CONSTANTS:
-    timeline = {
-        'cytarabine': '1968',
-        'daunorubicin': '1968',
-        'azacitidine': '1978',
-        'gemtuzumab-ozogamicin': '1999',
-        'midostaurin': '2002',
-        'vyxeos': '2010',
-        'ivosidenib': '2012',
-        'venetoclax': '2014',
-        'enasidenib': '2015',
-        'gilteritinib': '2015',
-        'glasdegib': '2015',
-        'arsenictrioxide': '1996',
-        'cyclophosphamide': '1970',
-        'dexamethasone': '1977',
-        'idarubicin': '1984',
-        'mitoxantrone': '1983',
-        'pemigatinib': '2019',
-        'prednisone': '1975',
-        'rituximab': '2000',
-        'thioguanine': '1972',
-        'vincristine': '1964',
-    }
+    # --- Encontra os arquivos CSV gerados pelo script anterior ---
+    w2v_folder = f'./data/{folder_name}/validation/per_compound/w2v/'
+    ft_folder = f'./data/{folder_name}/validation/per_compound/ft/'
 
-    DOT_PRODUCTS_PER_COMPOUND_BERT_FIRST_SUBWORD = [x.path for x in os.scandir('./validation/per_compound/bert/') if
-                                                    x.name.endswith('first.csv')]
-    DOT_PRODUCTS_PER_COMPOUND_BERT_LAST_SUBWORD = [x.path for x in os.scandir('./validation/per_compound/bert/') if
-                                                   x.name.endswith('last.csv')]
-    DOT_PRODUCTS_PER_COMPOUND_BERT_MEAN_SUBWORD = [x.path for x in os.scandir('./validation/per_compound/bert/') if
-                                                   x.name.endswith('mean.csv')]
-    DOT_PRODUCTS_PER_COMPOUND_W2V_COMB15 = [x.path for x in os.scandir('./validation/per_compound/w2v/') if
-                                            x.name.endswith('_comb15.csv')]
-    DOT_PRODUCTS_PER_COMPOUND_FT_COMB16 = [x.path for x in os.scandir('./validation/per_compound/ft/') if
-                                           x.name.endswith('_comb16.csv')]
+    csv_files_w2v = [os.path.join(w2v_folder, f) for f in os.listdir(w2v_folder) if f.endswith('_comb15.csv')]
+    csv_files_ft = [os.path.join(ft_folder, f) for f in os.listdir(ft_folder) if f.endswith('_comb16.csv')]
 
-    # BERT MODELS:
-    print('Generating plots for BERT-based models, first subword method')
-    # first subword:
-    plot_first_subword_dot_product_result_absolute = get_dot_products_plot_BERT(
-        DOT_PRODUCTS_PER_COMPOUND_BERT_FIRST_SUBWORD, column='dot_product_result_absolute')
-    plot_first_subword_softmax = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_BERT_FIRST_SUBWORD,
-                                                            column='softmax')
-    plot_first_subword_softmax_normalization = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_BERT_FIRST_SUBWORD,
-                                                                          column='softmax_normalization')
-    plot_first_subword_softmax_standartization = get_dot_products_plot_BERT(
-        DOT_PRODUCTS_PER_COMPOUND_BERT_FIRST_SUBWORD, column='softmax_standartization')
+    # --- Seleciona os Top N CHEMICALS para plotagem ---
+    top_n_to_plot = 20  # Você pode ajustar este número
+    top_w2v_files = select_top_n_chemicals(csv_files_w2v, top_n=top_n_to_plot)
+    top_ft_files = select_top_n_chemicals(csv_files_ft, top_n=top_n_to_plot)
 
-    print('Generating plots for BERT-based models, last subword method')
-    # last subword:
-    plot_last_subword_dot_product_result_absolute = get_dot_products_plot_BERT(
-        DOT_PRODUCTS_PER_COMPOUND_BERT_LAST_SUBWORD, column='dot_product_result_absolute')
-    plot_last_subword_softmax = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_BERT_LAST_SUBWORD,
-                                                           column='softmax')
-    plot_last_subword_softmax_normalization = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_BERT_LAST_SUBWORD,
-                                                                         column='softmax_normalization')
-    plot_last_subword_softmax_standartization = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_BERT_LAST_SUBWORD,
-                                                                           column='softmax_standartization')
+    # --- Gera os plots para cada modelo e métrica ---
+    metrics_to_plot = [
+        'dot_product_result_absolute',
+        'softmax',
+        'softmax_normalization',
+        'softmax_standardization'
+    ]
 
-    print('Generating plots for BERT-based models, mean subword method')
-    # mean subword:
-    plot_mean_subword_dot_product_result_absolute = get_dot_products_plot_BERT(
-        DOT_PRODUCTS_PER_COMPOUND_BERT_MEAN_SUBWORD, column='dot_product_result_absolute')
-    plot_mean_subword_softmax = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_BERT_MEAN_SUBWORD,
-                                                           column='softmax')
-    plot_mean_subword_softmax_normalization = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_BERT_MEAN_SUBWORD,
-                                                                         column='softmax_normalization')
-    plot_mean_subword_softmax_standartization = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_BERT_MEAN_SUBWORD,
-                                                                           column='softmax_standartization')
+    plots_data = {}  # Dicionário para armazenar todos os códigos Ti*k*Z
 
-    # WORD2VEC MODELS:
-    print('Generating plots for Word2Vec models, combination 15')
-    plot_comb15_dot_product_result_absolute = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_W2V_COMB15,
-                                                                         column='dot_product_result_absolute')
-    plot_comb15_softmax = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_W2V_COMB15, column='softmax')
-    plot_comb15_softmax_normalization = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_W2V_COMB15,
-                                                                   column='softmax_normalization')
-    plot_comb15_softmax_standartization = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_W2V_COMB15,
-                                                                     column='softmax_standartization')
+    # Geração para Word2Vec
+    print("\n--- Gerando plots para Word2Vec (combinação 15) ---")
+    for metric in metrics_to_plot:
+        key = f"plot_comb15_{metric}"
+        print(f"Gerando para a métrica: {metric}...")
+        plots_data[key] = generate_historical_plots(top_w2v_files, column_to_plot=metric)
 
-    # FASTTEXT MODELS:
-    print('Generating plots for FastText models, combination 16')
-    plot_comb16_dot_product_result_absolute = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_FT_COMB16,
-                                                                         column='dot_product_result_absolute')
-    plot_comb16_softmax = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_FT_COMB16, column='softmax')
-    plot_comb16_softmax_normalization = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_FT_COMB16,
-                                                                   column='softmax_normalization')
-    plot_comb16_softmax_standartization = get_dot_products_plot_BERT(DOT_PRODUCTS_PER_COMPOUND_FT_COMB16,
-                                                                     column='softmax_standartization')
+    # Geração para FastText
+    print("\n--- Gerando plots para FastText (combinação 16) ---")
+    for metric in metrics_to_plot:
+        key = f"plot_comb16_{metric}"
+        print(f"Gerando para a métrica: {metric}...")
+        plots_data[key] = generate_historical_plots(top_ft_files, column_to_plot=metric)
 
-    print('Generating .tex file')
+    # --- Renderiza o template LaTeX ---
+    print('\nGerando arquivo .tex do relatório...')
     report_latex = template.render(
-        # BERT-based:
-        plot_first_subword_dot_product_result_absolute=plot_first_subword_dot_product_result_absolute,
-        plot_first_subword_softmax=plot_first_subword_softmax,
-        plot_first_subword_softmax_normalization=plot_first_subword_softmax_normalization,
-        plot_first_subword_softmax_standartization=plot_first_subword_softmax_standartization,
-        plot_last_subword_dot_product_result_absolute=plot_last_subword_dot_product_result_absolute,
-        plot_last_subword_softmax=plot_last_subword_softmax,
-        plot_last_subword_softmax_normalization=plot_last_subword_softmax_normalization,
-        plot_last_subword_softmax_standartization=plot_last_subword_softmax_standartization,
-        plot_mean_subword_dot_product_result_absolute=plot_mean_subword_dot_product_result_absolute,
-        plot_mean_subword_softmax=plot_mean_subword_softmax,
-        plot_mean_subword_softmax_normalization=plot_mean_subword_softmax_normalization,
-        plot_mean_subword_softmax_standartization=plot_mean_subword_softmax_standartization,
-        # Word2Vec combination 15:
-        plot_comb15_dot_product_result_absolute=plot_comb15_dot_product_result_absolute,
-        plot_comb15_softmax=plot_comb15_softmax,
-        plot_comb15_softmax_normalization=plot_comb15_softmax_normalization,
-        plot_comb15_softmax_standartization=plot_comb15_softmax_standartization,
-        # FastText combination 16:
-        plot_comb16_dot_product_result_absolute=plot_comb16_dot_product_result_absolute,
-        plot_comb16_softmax=plot_comb16_softmax,
-        plot_comb16_softmax_normalization=plot_comb16_softmax_normalization,
-        plot_comb16_softmax_standartization=plot_comb16_softmax_standartization
+        target_disease_name=target_disease.replace('_', ' ').title(),
+        **plots_data  # Desempacota o dicionário de plots no template
     )
 
-    dat = date.today().strftime("%d/%m/%Y")
+    # --- Salva o arquivo final ---
+    dat = date.today().strftime("%d_%m")
+    output_filename = f'./latent_knowledge_report_{folder_name}_{dat}.tex'
 
-    with open('./latent_knowledge_report_{}.{}.tex'.format(dat[0:2], dat[3:5]), 'w') as f:
+    with open(output_filename, 'w', encoding='utf-8') as f:
         f.write(report_latex)
 
+    print(f'\nRelatório salvo com sucesso em: {output_filename}')
     print('END!')
