@@ -56,18 +56,15 @@ if __name__ == '__main__':
 
     # CONSTANTS:
     MODEL_TYPE = 'w2v' # 'w2v' for Word2Vec or 'ft' for FastText
+    if MODEL_TYPE not in ['w2v', 'ft']:
+        raise ValueError("MODEL_TYPE must be either 'w2v' or 'ft'")
 
-    # Cria a pasta para salvar os modelos e escolhe a combinação dos parâmetros.
-    if MODEL_TYPE == 'w2v':
-        os.makedirs(f'./data/{folder_name}/w2v/models_yoy_combination15/', exist_ok=True)
-        os.makedirs(f'./data/{folder_name}/w2v/models_yoy_combination2/', exist_ok=True)
+    # Cria as pastas para salvar os modelos e escolhe a combinação dos parâmetros.
+    os.makedirs(f'./data/{folder_name}/w2v/models_yoy_combination15/', exist_ok=True)
+    os.makedirs(f'./data/{folder_name}/ft/models_yoy_combination16/', exist_ok=True)
 
-        parameters_combination = [[100, 0.0025, 10], [200, 0.025, 15]]
-    
-    else:
-        os.makedirs(f'./data/{folder_name}/fasttext/models_yoy_combination16/', exist_ok=True)
-
-        parameters_combination = [[300, 0.0025, 5]]
+    if MODEL_TYPE == 'w2v': parameters_combination = [[100, 0.0025, 10], [200, 0.025, 15]]
+    else: parameters_combination = [[300, 0.0025, 5]]
 
     # Pega os dados do arquivo.
     print('Reading DataFrame of papers')
@@ -89,7 +86,6 @@ if __name__ == '__main__':
 
     # Para cada intervalo de tempo...
     for r in ranges:
-        if r[-1] < 2004: continue
         print('training model from {} to {}'.format(r[0], r[-1]))
 
         # Pega os abstracts que estão no intervalo.
@@ -129,6 +125,6 @@ if __name__ == '__main__':
                 vector_size=parameters_combination[0][0],
                 alpha=parameters_combination[0][1],
                 negative=parameters_combination[0][2])
-            model.save(f'/data/{folder_name}/fasttext/models_yoy_combination16/model_{first_year}_{r[-1]}.model')
+            model.save(f'/data/{folder_name}/ft/models_yoy_combination16/model_{first_year}_{r[-1]}.model')
 
     print('END!')

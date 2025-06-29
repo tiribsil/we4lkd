@@ -3,3 +3,4 @@
 /.venv
 /.ipynb_checkpoints
 api_key.py
+latent_knowledge_report_*.tex
