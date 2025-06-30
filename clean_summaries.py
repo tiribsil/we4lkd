@@ -8,7 +8,7 @@ from pyspark.sql.session import SparkSession
 from pyspark.sql.functions import udf
 from pyspark.sql.window import Window
 import pyspark.sql.types as T
-from target_disease import target_disease, folder_name
+from target_disease import target_disease, normalized_target_disease
 
 import string
 import nltk, os
@@ -359,8 +359,8 @@ if __name__ == '__main__':
     nltk.download('omw-1.4', quiet=True)
     nltk.download('stopwords', quiet=True)
 
-    CLEAN_PAPERS_PATH = f'./data/{folder_name}/clean_results'
-    AGGREGATED_RESULTS_PATH = f'./data/{folder_name}/aggregated_results'
+    CLEAN_PAPERS_PATH = f'./data/{normalized_target_disease}/clean_results'
+    AGGREGATED_RESULTS_PATH = f'./data/{normalized_target_disease}/aggregated_results'
     SYNONYM_ENTITIES = [x.lower() for x in ['Drug', 'Clinical_Drug', 'Pharmacologic_Substance']]
 
     # Cria a sessão do pyspark.
@@ -395,7 +395,7 @@ if __name__ == '__main__':
                     .withColumnRenamed("_c1", "title")
 
     # Cria tabela NER, que identifica o que cada termo é.
-    ner_df = read_table_file(f'./data/{folder_name}/ner_table.csv', ',', 'true')
+    ner_df = read_table_file(f'./data/{normalized_target_disease}/ner_table.csv', ',', 'true')
 
     print('ner_df:')
     ner_df.show(truncate=False)

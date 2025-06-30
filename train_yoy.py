@@ -23,7 +23,7 @@ from pathlib import Path
 from os import listdir
 import pandas as pd
 import numpy as np
-from target_disease import target_disease, folder_name
+from target_disease import target_disease, normalized_target_disease
 
 def list_from_txt(file_path):
     '''Creates a list of itens based on a .txt file, each line becomes an item.
@@ -60,15 +60,15 @@ if __name__ == '__main__':
         raise ValueError("MODEL_TYPE must be either 'w2v' or 'ft'")
 
     # Cria as pastas para salvar os modelos e escolhe a combinação dos parâmetros.
-    os.makedirs(f'./data/{folder_name}/w2v/models_yoy_combination15/', exist_ok=True)
-    os.makedirs(f'./data/{folder_name}/ft/models_yoy_combination16/', exist_ok=True)
+    os.makedirs(f'./data/{normalized_target_disease}/w2v/models_yoy_combination15/', exist_ok=True)
+    os.makedirs(f'./data/{normalized_target_disease}/ft/models_yoy_combination16/', exist_ok=True)
 
     if MODEL_TYPE == 'w2v': parameters_combination = [[100, 0.0025, 10], [200, 0.025, 15]]
     else: parameters_combination = [[300, 0.0025, 5]]
 
     # Pega os dados do arquivo.
     print('Reading DataFrame of papers')
-    df = pd.read_csv(f'./data/{folder_name}/clean_results/clean_results.csv')
+    df = pd.read_csv(f'./data/{normalized_target_disease}/clean_results/clean_results.csv')
     print(df.head())
 
     # Pega os anos dos artigos.
@@ -110,7 +110,7 @@ if __name__ == '__main__':
                 alpha=parameters_combination[1][1],
                 negative=parameters_combination[1][2]
             )
-            model_comb15.save(f'./data/{folder_name}/w2v/models_yoy_combination15/model_{first_year}_{r[-1]}.model')
+            model_comb15.save(f'./data/{normalized_target_disease}/w2v/models_yoy_combination15/model_{first_year}_{r[-1]}.model')
 
         else:
             model = FastText(
@@ -125,6 +125,6 @@ if __name__ == '__main__':
                 vector_size=parameters_combination[0][0],
                 alpha=parameters_combination[0][1],
                 negative=parameters_combination[0][2])
-            model.save(f'/data/{folder_name}/ft/models_yoy_combination16/model_{first_year}_{r[-1]}.model')
+            model.save(f'/data/{normalized_target_disease}/ft/models_yoy_combination16/model_{first_year}_{r[-1]}.model')
 
     print('END!')

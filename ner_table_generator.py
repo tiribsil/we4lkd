@@ -1,15 +1,15 @@
 import spacy
 import pandas as pd
 from pathlib import Path
-from target_disease import target_disease, folder_name
+from target_disease import target_disease, normalized_target_disease
 
 FINAL_PROCESSING_YEAR = 2025
 
 RELEVANT_SPACY_ENTITY_TYPES = ['CHEMICAL']
 MAPPED_ENTITY_TYPE = 'pharmacologic_substance'
 
-OUTPUT_NER_CSV_PATH = f'./data/{folder_name}/ner_table.csv'
-INPUT_ABSTRACTS_PATH = f'./data/{folder_name}/aggregated_results'
+OUTPUT_NER_CSV_PATH = f'./data/{normalized_target_disease}/ner_table.csv'
+INPUT_ABSTRACTS_PATH = f'./data/{normalized_target_disease}/aggregated_results'
 
 def load_spacy_model():
     spacy.require_gpu()
@@ -123,7 +123,7 @@ def main():
     if nlp is None:
         return
 
-    Path(f"./data/{folder_name}").mkdir(parents=True, exist_ok=True)
+    Path(f"./data/{normalized_target_disease}").mkdir(parents=True, exist_ok=True)
 
     print(f"Iniciando processamento NER para a doença: {target_disease} (pasta: {INPUT_ABSTRACTS_PATH})")
     print(f"Processando arquivos até o ano (inclusive): {FINAL_PROCESSING_YEAR}")

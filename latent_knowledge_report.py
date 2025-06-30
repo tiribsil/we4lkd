@@ -14,7 +14,7 @@ from matplotlib import pyplot as plt
 from datetime import date
 from tikzplotlib import get_tikz_code
 
-from target_disease import target_disease, folder_name
+from target_disease import target_disease, normalized_target_disease
 
 
 def select_top_n_chemicals(model_type, combination, metric, top_n=20):
@@ -32,7 +32,7 @@ def select_top_n_chemicals(model_type, combination, metric, top_n=20):
         list: Uma lista dos 'top_n' caminhos de arquivos CSV mais relevantes.
     """
     # 1. Constrói o caminho para a pasta de validação com base no tipo de modelo
-    validation_folder = f'./data/{folder_name}/validation/per_compound/{model_type}/'
+    validation_folder = f'./data/{normalized_target_disease}/validation/per_compound/{model_type}/'
 
     # 2. Encontra todos os arquivos CSV relevantes na pasta
     try:
@@ -78,7 +78,7 @@ def select_top_n_chemicals(model_type, combination, metric, top_n=20):
 
     # 6. Salva os nomes dos CHEMICALS selecionados em um arquivo CSV
     # Constrói o caminho do arquivo de saída
-    output_dir = f'./data/{folder_name}/{model_type}/'
+    output_dir = f'./data/{normalized_target_disease}/{model_type}/'
     os.makedirs(output_dir, exist_ok=True)  # Garante que o diretório exista
     output_filename = os.path.join(output_dir, f'top_{top_n}_{metric}.csv')
 
@@ -202,7 +202,7 @@ if __name__ == '__main__':
     ]
 
     # Pega os nomes de todos os arquivos que vieram do crawler.
-    aggregated_files = sorted(list(map(str, Path(f'./data/{folder_name}/aggregated_results').glob('*.txt'))))
+    aggregated_files = sorted(list(map(str, Path(f'./data/{normalized_target_disease}/aggregated_results').glob('*.txt'))))
 
     year_range = int(Path(aggregated_files[0]).stem[-9:-5]), int(Path(aggregated_files[-1]).stem[-9:-5])
 
@@ -249,7 +249,7 @@ if __name__ == '__main__':
 
     # --- Salva o arquivo final ---
     dat = date.today().strftime("%d_%m_%Y")
-    output_filename = f'./latent_knowledge_report_{folder_name}_{dat}.tex'
+    output_filename = f'./latent_knowledge_report_{normalized_target_disease}_{dat}.tex'
 
     with open(output_filename, 'w', encoding='utf-8') as f:
         f.write(report_latex)

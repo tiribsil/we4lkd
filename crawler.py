@@ -1,10 +1,13 @@
 import string
+from time import sleep
 
 from Bio import Entrez
 from pathlib import Path
 from google import genai
+from lark.load_grammar import find_grammar_errors
+
 from api_key import MY_API_KEY
-from target_disease import target_disease, folder_name
+from target_disease import target_disease, normalized_target_disease
 from lark import Lark, LarkError
 
 def list_from_txt(file_path):
@@ -42,18 +45,22 @@ def follows_grammar(query_string: str) -> bool:
     Verifica se uma string segue a gramática definida.
     """
     pubmed_grammar = r"""
-        ?query: group (_AND group)*
+        ?query: or_expr
 
-        group: _LPAREN term (_OR term)* _RPAREN
+        or_expr: and_expr (_OR and_expr)*
 
-        term: main_body (_LBRACKET tag_body _RBRACKET)?
+        and_expr: atom+
+
+        atom: main_body (_LBRACKET tag_body _RBRACKET)?
+            | _LPAREN or_expr _RPAREN
 
         main_body: QUOTED_STRING | unquoted_main_body
-        unquoted_main_body: IDENTIFIER+
+
+        unquoted_main_body: IDENTIFIER _ASTERISK?
 
         tag_body: IDENTIFIER+
 
-        QUOTED_STRING: /"[^"]+"/ 
+        QUOTED_STRING: /"[^"]+"/
 
         _AND: "AND"
         _OR: "OR"
@@ -62,7 +69,9 @@ def follows_grammar(query_string: str) -> bool:
         _LBRACKET: "["
         _RBRACKET: "]"
 
-        IDENTIFIER: /[a-zA-Z0-9_.:-]+/
+        _ASTERISK: "*"
+
+        IDENTIFIER: /[a-zA-Z0-9_.:\/\-]+/
 
         %import common.WS
         %ignore WS
@@ -83,6 +92,8 @@ def follows_grammar(query_string: str) -> bool:
         pubmed_parser.parse(query_string)
         return True
     except LarkError as e:
+        print(query_string)
+        print(f"--> Detalhe do erro do Lark: {e}")
         return False
 
 def generate_query(disease):
@@ -131,13 +142,21 @@ def normalize_disease_name(disease):
 
     return response.text
 
+def grammar_testing(iterations):
+    for i in range(iterations):
+        query = generate_query(target_disease)
+        print(query)
+        sleep(30)
+
 if __name__ == '__main__':
-    DESTINATION_DIR = f'./data/{folder_name}/raw_results'
-    DOWNLOADED_PAPERS_IDS_FILE = f'./data/{folder_name}/ids.txt'
+    DESTINATION_DIR = f'./data/{normalized_target_disease}/raw_results'
+    DOWNLOADED_PAPERS_IDS_FILE = f'./data/{normalized_target_disease}/ids.txt'
 
     # Cria uma query com termos de busca relevantes.
-    # target_disease = input('Enter a target disease: ')
-    # target_disease = normalize_disease_name(target_disease)
+    target_disease = input('Enter a target disease: ')
+    target_disease = normalize_disease_name(target_disease)
+    print(f'Normalized target disease: {target_disease}')
+
     query = generate_query(target_disease)
     print(f'Query: {query}')
     paper_counter = 0

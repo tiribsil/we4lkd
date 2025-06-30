@@ -17,7 +17,7 @@ from scipy.special import softmax
 import pandas as pd
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 
-from target_disease import target_disease, folder_name
+from target_disease import target_disease, normalized_target_disease
 
 
 def clear_hugging_face_cache_folder(dirpath='/home/ac4mvvb/.cache/huggingface/hub/'):
@@ -77,7 +77,7 @@ def get_token_embedding(word, embedding_matrix, method='mean'):
 def generate_compound_historical_record(compound):
     for method in ['first', 'last', 'mean']:
         bert_embeddings_files = sorted(
-            [f.path for f in os.scandir(f'./{folder_name}/validation/bert/') if f.name.endswith('.pt') and method in f.name])
+            [f.path for f in os.scandir(f'./{normalized_target_disease}/validation/bert/') if f.name.endswith('.pt') and method in f.name])
 
         compound_dict = {
             'year': [],
@@ -194,7 +194,7 @@ def get_w2v_output_embedding(word, model, method):
 
 
 def get_compounds():
-    all_chemical_from_ner = pd.read_csv(f'./data/{folder_name}/ner_table.csv')
+    all_chemical_from_ner = pd.read_csv(f'./data/{normalized_target_disease}/ner_table.csv')
     return all_chemical_from_ner['token'].tolist()
 
 # MAIN PROGRAM:
@@ -209,8 +209,8 @@ if __name__ == '__main__':
         exit(1)
     combination = '15' if VALIDATION_TYPE == 'w2v' else '16'
 
-    model_directory_path = f'./data/{folder_name}/{VALIDATION_TYPE}/models_yoy_combination{combination}/'
-    validation_directory_path = f'./data/{folder_name}/validation/per_compound/{VALIDATION_TYPE}/'
+    model_directory_path = f'./data/{normalized_target_disease}/{VALIDATION_TYPE}/models_yoy_combination{combination}/'
+    validation_directory_path = f'./data/{normalized_target_disease}/validation/per_compound/{VALIDATION_TYPE}/'
 
     os.makedirs(model_directory_path, exist_ok=True)
     os.makedirs(validation_directory_path, exist_ok=True)
@@ -236,8 +236,8 @@ if __name__ == '__main__':
     # list of years which models were trained (the length of this list is the number of models trained):
     years = []
 
-    for file in os.listdir(f'./data/{folder_name}/aggregated_results/'):
-        file_path = f'./data/{folder_name}/aggregated_results/{file}'
+    for file in os.listdir(f'./data/{normalized_target_disease}/aggregated_results/'):
+        file_path = f'./data/{normalized_target_disease}/aggregated_results/{file}'
 
         filename, extension = os.path.splitext(file_path)
         years.append(int(filename[-4:]))
@@ -261,8 +261,8 @@ if __name__ == '__main__':
 
             # accessing the word embedding of AML:
             try:
-                target_disease_we = model_comb15.wv[folder_name]
-                print(f"Accessing the word embedding of '{folder_name}'")
+                target_disease_we = model_comb15.wv[normalized_target_disease]
+                print(f"Accessing the word embedding of '{normalized_target_disease}'")
 
             except:
                 print('Target disease is not in the vocabulary')
@@ -292,8 +292,8 @@ if __name__ == '__main__':
 
             # accessing the word embedding of AML:
             try:
-                target_disease_we = model_comb16.wv[folder_name]
-                print(f"Accessing the word embedding of '{folder_name}'")
+                target_disease_we = model_comb16.wv[normalized_target_disease]
+                print(f"Accessing the word embedding of '{normalized_target_disease}'")
 
             except:
                 print('Target disease is not in the vocabulary')
