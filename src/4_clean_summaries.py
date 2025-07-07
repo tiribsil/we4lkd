@@ -17,6 +17,8 @@ from nltk.tokenize import word_tokenize
 
 from functools import reduce
 
+os.chdir(Path(__file__).resolve().parent.parent)
+
 def ss():
     spark = SparkSession.builder \
         .appName("LargeDataProcessingApp")\
@@ -359,8 +361,8 @@ if __name__ == '__main__':
     nltk.download('omw-1.4', quiet=True)
     nltk.download('stopwords', quiet=True)
 
-    CLEAN_PAPERS_PATH = f'./data/{normalized_target_disease}/clean_results'
-    AGGREGATED_RESULTS_PATH = f'./data/{normalized_target_disease}/aggregated_results'
+    CLEAN_PAPERS_PATH = f'./data/{normalized_target_disease}/corpus/clean_abstracts'
+    AGGREGATED_ABSTRACTS_PATH = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts'
     SYNONYM_ENTITIES = [x.lower() for x in ['Drug', 'Clinical_Drug', 'Pharmacologic_Substance']]
 
     # Cria a sessão do pyspark.
@@ -385,17 +387,17 @@ if __name__ == '__main__':
     #####################################################################
 
     # Cria tabela de sinônimos (cid | sinônimo).
-    synonyms = read_table_file('./data/compound_data/CID-Synonym-filtered', '\t', 'false')
+    synonyms = read_table_file('data/pubchem_data/CID-Synonym-filtered', '\t', 'false')
     synonyms = synonyms.withColumnRenamed("_c0", "cid")\
                         .withColumnRenamed("_c1", "synonym")
 
     # Cria tabela de nomes principais (cid | nome).
-    titles = read_table_file('./data/compound_data/CID-Title', '\t', 'false')
+    titles = read_table_file('data/pubchem_data/CID-Title', '\t', 'false')
     titles = titles.withColumnRenamed("_c0", "cid")\
                     .withColumnRenamed("_c1", "title")
 
     # Cria tabela NER, que identifica o que cada termo é.
-    ner_df = read_table_file(f'./data/{normalized_target_disease}/ner_table.csv', ',', 'true')
+    ner_df = read_table_file(f'./data/{normalized_target_disease}/corpus/ner_table.csv', ',', 'true')
 
     print('ner_df:')
     ner_df.show(truncate=False)
@@ -434,7 +436,7 @@ if __name__ == '__main__':
     #####################################################################
 
     # Carrega os abstracts e salva como uma tabela (filename | id | summary), cada linha representa um artigo.
-    cleaned_documents = dataframes_from_txt(AGGREGATED_RESULTS_PATH)
+    cleaned_documents = dataframes_from_txt(AGGREGATED_ABSTRACTS_PATH)
     print('Abstracts originais:')
     cleaned_documents.show(truncate=False)
 
@@ -516,7 +518,7 @@ if __name__ == '__main__':
     # Escreve os .csv.
     print('Escrevendo csv')
     to_csv(df, target_folder=CLEAN_PAPERS_PATH)
-    rename_csv_in_folder(CLEAN_PAPERS_PATH, 'clean_results.csv')
+    rename_csv_in_folder(CLEAN_PAPERS_PATH, 'clean_abstracts.csv')
 
     df.printSchema()
     print('END!')

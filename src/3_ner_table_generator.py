@@ -1,15 +1,19 @@
+import os
+
 import spacy
 import pandas as pd
 from pathlib import Path
 from target_disease import target_disease, normalized_target_disease
+
+os.chdir(Path(__file__).resolve().parent.parent)
 
 FINAL_PROCESSING_YEAR = 2025
 
 RELEVANT_SPACY_ENTITY_TYPES = ['CHEMICAL']
 MAPPED_ENTITY_TYPE = 'pharmacologic_substance'
 
-OUTPUT_NER_CSV_PATH = f'./data/{normalized_target_disease}/ner_table.csv'
-INPUT_ABSTRACTS_PATH = f'./data/{normalized_target_disease}/aggregated_results'
+OUTPUT_NER_CSV_PATH = f'./data/{normalized_target_disease}/corpus/ner_table.csv'
+INPUT_ABSTRACTS_PATH = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts'
 
 def load_spacy_model():
     spacy.require_gpu()

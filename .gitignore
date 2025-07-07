@@ -1,5 +1,6 @@
 /.idea
-/data
+/data/*
+!/data/latent_knowledge_template.tex
 /.venv
 /.ipynb_checkpoints
 api_key.py

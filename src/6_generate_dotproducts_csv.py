@@ -5,6 +5,7 @@
 # IMPORTS:
 import os, torch, sys, shutil
 import re
+from pathlib import Path
 
 from gensim.models import Word2Vec, FastText
 import numpy as np
@@ -14,6 +15,7 @@ from transformers import AutoTokenizer, AutoModelForMaskedLM
 
 from target_disease import target_disease, normalized_target_disease
 
+os.chdir(Path(__file__).resolve().parent.parent)
 
 def clear_hugging_face_cache_folder(dirpath='/home/ac4mvvb/.cache/huggingface/hub/'):
     """ Clears the Hugging Face cache folder, to prevent memory error.
@@ -189,8 +191,8 @@ def get_w2v_output_embedding(word, model, method):
 
 
 def get_compounds():
-    pubchem_path = './data/compound_data/CID-Title'
-    ner_table_path = f'./data/{normalized_target_disease}/ner_table.csv'
+    pubchem_path = 'data/pubchem_data/CID-Title'
+    ner_table_path = f'./data/{normalized_target_disease}/corpus/ner_table.csv'
 
     pubchem_titles = pd.read_csv(
         pubchem_path,
@@ -217,7 +219,7 @@ def get_compounds():
 
     print(f"Total de compostos validados: {len(validated_normalized_compounds)}")
 
-    with open(f'./data/{normalized_target_disease}/compounds_in_corpus.txt', 'w', encoding='utf-8') as f:
+    with open(f'./data/{normalized_target_disease}/corpus/compounds_in_corpus.txt', 'w', encoding='utf-8') as f:
         for compound in sorted(validated_normalized_compounds):
             f.write(f"{compound}\n")
 
@@ -229,8 +231,8 @@ if __name__ == '__main__':
 
     # Loads all compounds present in the corpus.
     all_compounds_in_corpus = []
-    if os.path.exists(f'./data/{normalized_target_disease}/compounds_in_corpus.txt'):
-        with open(f'./data/{normalized_target_disease}/compounds_in_corpus.txt', 'w', encoding='utf-8') as f:
+    if os.path.exists(f'./data/{normalized_target_disease}/corpus/compounds_in_corpus.txt'):
+        with open(f'./data/{normalized_target_disease}/corpus/compounds_in_corpus.txt', 'w', encoding='utf-8') as f:
             all_compounds_in_corpus = [line.strip() for line in f if line.strip()]
     else:
         all_compounds_in_corpus = get_compounds()
@@ -242,8 +244,8 @@ if __name__ == '__main__':
         exit(1)
     combination = '15' if VALIDATION_TYPE == 'w2v' else '16'
 
-    model_directory_path = f'./data/{normalized_target_disease}/{VALIDATION_TYPE}/models_yoy_combination{combination}/'
-    validation_directory_path = f'./data/{normalized_target_disease}/validation/per_compound/{VALIDATION_TYPE}/'
+    model_directory_path = f'./data/{normalized_target_disease}/models/{VALIDATION_TYPE}_combination{combination}/'
+    validation_directory_path = f'./data/{normalized_target_disease}/validation/{VALIDATION_TYPE}/compound_history/'
 
     os.makedirs(model_directory_path, exist_ok=True)
     os.makedirs(validation_directory_path, exist_ok=True)
@@ -272,8 +274,8 @@ if __name__ == '__main__':
     # List of years until which the models were trained.
     years = []
 
-    for file in os.listdir(f'./data/{normalized_target_disease}/aggregated_results/'):
-        file_path = f'./data/{normalized_target_disease}/aggregated_results/{file}'
+    for file in os.listdir(f'./data/{normalized_target_disease}/corpus/aggregated_abstracts/'):
+        file_path = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts/{file}'
 
         filename, extension = os.path.splitext(file_path)
         years.append(int(filename[-4:]))

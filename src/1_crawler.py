@@ -1,3 +1,4 @@
+import os
 import string
 from time import sleep
 
@@ -9,6 +10,8 @@ from lark.load_grammar import find_grammar_errors
 from api_key import MY_API_KEY
 from target_disease import target_disease, normalized_target_disease
 from lark import Lark, LarkError
+
+os.chdir(Path(__file__).resolve().parent.parent)
 
 def list_from_txt(file_path):
     strings_list = []
@@ -154,8 +157,8 @@ if __name__ == '__main__':
     #target_disease = canonize_disease_name(target_disease)
     #print(f'Canonical name for target disease: {target_disease}')
 
-    DESTINATION_DIR = f'./data/{normalized_target_disease}/raw_results'
-    DOWNLOADED_PAPERS_IDS_FILE = f'./data/{normalized_target_disease}/ids.txt'
+    DESTINATION_DIR = f'./data/{normalized_target_disease}/corpus/raw_abstracts'
+    DOWNLOADED_PAPERS_IDS_FILE = f'./data/{normalized_target_disease}/corpus/ids.txt'
 
     # Generates a query to find relevant papers about the target disease.
     # There is a grammar checking function that will ensure the query is valid.

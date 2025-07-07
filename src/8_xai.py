@@ -11,6 +11,7 @@ from google import genai
 from api_key import MY_API_KEY
 from target_disease import target_disease, normalized_target_disease
 
+os.chdir(Path(__file__).resolve().parent.parent)
 
 def extract_co_occurrence_contexts(corpus_df, target_chemical, target_disease, year, window_size=20):
     """
@@ -142,11 +143,15 @@ if __name__ == '__main__':
     if MODEL_TYPE not in ['w2v', 'ft']:
         raise ValueError("MODEL_TYPE deve ser 'w2v' ou 'ft'.")
 
-    sentences_dir_path = f'./data/{normalized_target_disease}/validation/per_compound/{MODEL_TYPE}_sentences'
+    sentences_dir_path = f'./data/{normalized_target_disease}/validation/{MODEL_TYPE}/sentences'
+    os.makedirs(sentences_dir_path, exist_ok=True)
+
+    xai_path = f'./data/{normalized_target_disease}/validation/{MODEL_TYPE}/xai'
+    os.makedirs(xai_path, exist_ok=True)
 
     # Pega os nomes de todos os arquivos que vieram do crawler.
     aggregated_files = sorted(
-        list(map(str, Path(f'./data/{normalized_target_disease}/aggregated_results').glob('*.txt'))))
+        list(map(str, Path(f'./data/{normalized_target_disease}/corpus/aggregated_abstracts').glob('*.txt'))))
 
     # Define a faixa de anos a ser processada
     year_range = int(Path(aggregated_files[0]).stem[-4:]), int(Path(aggregated_files[-1]).stem[-4:])
@@ -155,7 +160,6 @@ if __name__ == '__main__':
 
     for year in range(start_year, end_year + 1):
         sentences_file_path = f'{sentences_dir_path}/sentences_{year}.json'
-        os.makedirs(sentences_dir_path, exist_ok=True)
 
         sentences_by_compound = {}
         if os.path.exists(sentences_file_path):
@@ -163,7 +167,7 @@ if __name__ == '__main__':
             with open(sentences_file_path, 'r', encoding='utf-8') as f:
                 sentences_by_compound = sort_by_sentences(json.load(f))
         else:
-            top_n_directory = f'./data/{normalized_target_disease}/{MODEL_TYPE}/{year}'
+            top_n_directory = f'./data/{normalized_target_disease}/validation/{MODEL_TYPE}/top_n_compounds/{year}'
 
             metrics = [
                 'dot_product_result_absolute',
@@ -181,7 +185,7 @@ if __name__ == '__main__':
                 candidate_compounds.extend(df['chemical_name'].tolist())
 
             candidate_compounds = list(set(candidate_compounds))
-            clean_results_df = pd.read_csv(f'./data/{normalized_target_disease}/clean_results/clean_results.csv')
+            clean_results_df = pd.read_csv(f'./data/{normalized_target_disease}/corpus/clean_abstracts/clean_abstracts.csv')
 
             print(f"Arquivo de cache não encontrado. Processando sentenças do zero...")
 
@@ -197,37 +201,14 @@ if __name__ == '__main__':
             with open(sentences_file_path, 'w', encoding='utf-8') as f:
                 json.dump(sentences_by_compound, f, indent=4, ensure_ascii=False)
 
-        with open(f'{sentences_dir_path}/xai_{year}.txt', 'w', encoding='utf-8') as f:
+        if os.path.exists(f'{xai_path}/xai_{year}.md'):
+            print(f"Arquivo de explicações já existe para o ano {year}. Pulando...")
+            continue
+        with open(f'{xai_path}/xai_{year}.md', 'w', encoding='utf-8') as f:
             xai_output = ''
             for compound, sentences in itertools.islice(sentences_by_compound.items(), n_compounds):
                 explanation = explanation_for_chemical(compound, sentences, n_sentences)
-                xai_output += f'Explanation for {compound}:\n{explanation}\n'
+                xai_output += f'**Explanation for {compound}:**\n{explanation}\n\n'
                 sleep(30)
             f.write(xai_output)
             print(xai_output)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

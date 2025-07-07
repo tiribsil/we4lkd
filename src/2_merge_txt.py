@@ -3,9 +3,11 @@ from pathlib import Path
 
 from target_disease import normalized_target_disease
 
+os.chdir(Path(__file__).resolve().parent.parent)
+
 if __name__ == '__main__':
-    source_path = f'./data/{normalized_target_disease}/raw_results'
-    destination_path = f'./data/{normalized_target_disease}/aggregated_results'
+    source_path = f'./data/{normalized_target_disease}/corpus/raw_abstracts'
+    destination_path = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts'
 
     # Pega os nomes de todos os arquivos que vieram do crawler.
     filenames = sorted(list(map(str, Path(source_path).glob('*.txt'))))

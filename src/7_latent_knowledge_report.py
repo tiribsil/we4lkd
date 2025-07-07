@@ -17,8 +17,9 @@ from matplotlib import pyplot as plt
 from datetime import date
 from tikzplotlib import get_tikz_code
 
-# Assumindo que este arquivo existe e define as variáveis
 from target_disease import target_disease, normalized_target_disease
+
+os.chdir(Path(__file__).resolve().parent.parent)
 
 def select_top_n_chemicals_per_year(model_type, combination, metric, year, top_n=20):
     """
@@ -36,7 +37,7 @@ def select_top_n_chemicals_per_year(model_type, combination, metric, year, top_n
         list: Uma lista dos caminhos de arquivos CSV dos 'top_n' compostos.
     """
     # 1. Caminho para a pasta com os dados históricos de cada composto
-    validation_folder = f'./data/{normalized_target_disease}/validation/per_compound/{model_type}/'
+    validation_folder = f'./data/{normalized_target_disease}/validation/{model_type}/compound_history/'
 
     # 2. Lista todos os arquivos CSV relevantes para a combinação
     try:
@@ -81,7 +82,7 @@ def select_top_n_chemicals_per_year(model_type, combination, metric, year, top_n
         print(f"  {name}: {score:.4f}")
 
     # 6. Salva os nomes dos compostos selecionados em um CSV específico para o ano
-    output_dir = f'./data/{normalized_target_disease}/{model_type}/{year}/'
+    output_dir = f'./data/{normalized_target_disease}/validation/{model_type}/top_n_compounds/{year}/'
     os.makedirs(output_dir, exist_ok=True)  # Garante que o diretório do ano exista
     output_filename = os.path.join(output_dir, f'top_{top_n}_{metric}.csv')
 
@@ -175,7 +176,7 @@ if __name__ == '__main__':
         trim_blocks=True, autoescape=False,
         loader=jinja2.FileSystemLoader(os.path.abspath('.'))
     )
-    template = latex_jinja_env.get_template('./latent_knowledge_template.tex')
+    template = latex_jinja_env.get_template('./data/latent_knowledge_template.tex')
 
     plots_data = {}
 
@@ -187,7 +188,7 @@ if __name__ == '__main__':
     ]
 
     # Pega os nomes de todos os arquivos que vieram do crawler.
-    aggregated_files = sorted(list(map(str, Path(f'./data/{normalized_target_disease}/aggregated_results').glob('*.txt'))))
+    aggregated_files = sorted(list(map(str, Path(f'./data/{normalized_target_disease}/corpus/aggregated_abstracts').glob('*.txt'))))
 
     # Define a faixa de anos a ser processada
     year_range = int(Path(aggregated_files[0]).stem[-4:]), int(Path(aggregated_files[-1]).stem[-4:])
@@ -268,10 +269,11 @@ if __name__ == '__main__':
 
     # --- Salva o arquivo final ---
     dat = date.today().strftime("%d_%m_%Y")
-    output_filename = f'./latent_knowledge_report_{normalized_target_disease}_{dat}.tex'
+    output_file = f'./data/{normalized_target_disease}/reports/latent_knowledge_report_{dat}.tex'
 
-    with open(output_filename, 'w', encoding='utf-8') as f:
+    Path(f'./data/{normalized_target_disease}/reports/').mkdir(parents=True, exist_ok=True)
+    with open(output_file, 'w', encoding='utf-8') as f:
         f.write(report_latex)
 
-    print(f'\nRelatório salvo com sucesso em: {output_filename}')
+    print(f'\nRelatório salvo com sucesso em: {output_file}')
     print('END!')
