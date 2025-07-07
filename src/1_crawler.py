@@ -12,7 +12,15 @@ from lark import Lark, LarkError
 # This makes sure the script runs from the root of the project, so relative paths work correctly.
 os.chdir(Path(__file__).resolve().parent.parent)
 
-def list_from_txt(file_path):
+def list_from_file(file_path):
+    """
+    Reads a text file and returns a list of strings, each string being a line from the file.
+    Args:
+        file_path: Path to the text file.
+
+    Returns:
+        strings_list: List of strings from the file.
+    """
     strings_list = []
     try:
         with open(file_path, 'rt', encoding='utf-8') as list_file:
@@ -20,8 +28,16 @@ def list_from_txt(file_path):
     except FileNotFoundError: pass
     return strings_list
 
-def search(paper_query):
-    final_query = f'{paper_query} AND English[Language]'
+def search(query):
+    """
+    Searches for papers in PubMed using the provided query.
+    Args:
+        query: The search query for PubMed.
+
+    Returns:
+        found: A dictionary containing the search results.
+    """
+    final_query = f'{query} AND English[Language]'
     Entrez.email = 'tirs@estudante.ufscar.br'
     handle = Entrez.esearch(db='pubmed',
                             sort='relevance',
@@ -33,6 +49,14 @@ def search(paper_query):
     return found
 
 def fetch_details(paper_ids):
+    """
+    Fetches detailed information about papers from PubMed using their IDs.
+    Args:
+        paper_ids: A list of PubMed paper IDs.
+
+    Returns:
+        found: A dictionary containing detailed information about the papers.
+    """
     ids_string = ','.join(paper_ids)
     Entrez.email = 'tirs@estudante.ufscar.br'
     handle = Entrez.efetch(db='pubmed',
@@ -42,9 +66,14 @@ def fetch_details(paper_ids):
     handle.close()
     return found
 
-def follows_grammar(query_string: str) -> bool:
+def follows_grammar(query: str) -> bool:
     """
-    Verifica se uma string segue a gramática definida.
+    Checks if the provided PubMed query string follows the defined grammar rules.
+    Args:
+        query: The PubMed query string to be validated.
+
+    Returns:
+        bool: True if the query follows the grammar, False otherwise.
     """
     pubmed_grammar = r"""
         ?query: or_expr
@@ -88,17 +117,25 @@ def follows_grammar(query_string: str) -> bool:
     if not pubmed_parser:
         print("Parser não foi inicializado corretamente.")
         return False
-    if not query_string.strip():
+    if not query.strip():
         return False
     try:
-        pubmed_parser.parse(query_string)
+        pubmed_parser.parse(query)
         return True
     except LarkError as e:
-        print(query_string)
+        print(query)
         print(f"--> Detalhe do erro do Lark: {e}")
         return False
 
 def generate_query(disease):
+    """
+    Generates a PubMed search query for a given disease using Google GenAI. TODO: change to a local model.
+    Args:
+        disease: The name of the disease for which to generate the query.
+
+    Returns:
+        response.text: The generated PubMed search query.
+    """
     client = genai.Client(api_key=MY_API_KEY)
 
     prompt = f"""
@@ -131,8 +168,15 @@ def generate_query(disease):
         exit(1)
     return response.text
 
-
 def canonize_disease_name(disease):
+    """
+    Generates the canonical name of a disease using Google GenAI. TODO: change to a local solution.
+    Args:
+        disease: The name of the disease to be canonized.
+
+    Returns:
+        response.text: The canonical name of the disease in lower case and without punctuation.
+    """
     client = genai.Client(api_key=MY_API_KEY)
 
     prompt = f"""
@@ -145,6 +189,15 @@ def canonize_disease_name(disease):
     return response.text
 
 def grammar_testing(iterations, target_disease):
+    """
+    Testing function. It tries to force errors in the grammar checking function by generating queries repeatedly.
+    Args:
+        iterations: Number of iterations to run the test.
+        target_disease: Name of the target disease for which to generate queries.
+
+    Returns:
+        Nothing.
+    """
     for i in range(iterations):
         query = generate_query(target_disease)
         print(query)
@@ -173,7 +226,7 @@ def main():
     # From now on, everything will be tied to the target disease, being stored in a folder named after it inside the ./data folder.
 
     # Creates a list of IDs of already downloaded papers so we don't download them again.
-    old_papers = list_from_txt(downloaded_paper_ids_path)
+    old_papers = list_from_file(downloaded_paper_ids_path)
     downloaded_paper_ids = set(old_papers)
 
     # Normalizes query to avoid issues with special characters.
