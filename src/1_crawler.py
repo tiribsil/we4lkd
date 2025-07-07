@@ -164,7 +164,6 @@ def generate_query(disease):
         response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
     if not follows_grammar(response.text):
         print('Query does not follow grammar rules. Exiting.')
-        # Não sei o que fazer para resolver isso, então só sai.
         exit(1)
     return response.text
 
@@ -241,7 +240,7 @@ def main():
     # If nothing new was found, exits the program. All papers matching the query were already downloaded.
     if not new_paper_id_list:
         print('No new papers found\n')
-        exit(0)
+        return
 
     print(f'{len(new_paper_id_list)} papers found\n')
 

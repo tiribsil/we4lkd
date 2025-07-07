@@ -246,7 +246,7 @@ def main():
     VALIDATION_TYPE = 'w2v'
     if VALIDATION_TYPE not in ['w2v', 'ft']:
         print('Invalid validation type, has to be either "w2v" or "ft".')
-        exit(1)
+        return
     combination = '15' if VALIDATION_TYPE == 'w2v' else '16'
 
     model_directory_path = f'./data/{normalized_target_disease}/models/{VALIDATION_TYPE}_combination{combination}/'

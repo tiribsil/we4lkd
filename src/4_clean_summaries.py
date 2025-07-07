@@ -26,6 +26,7 @@ def ss():
         .getOrCreate()
     return spark
 
+
 def dataframes_from_txt(summaries_path):
     filenames = sorted([str(x) for x in Path(summaries_path).glob('*.txt')])
     dataframes = []
@@ -72,6 +73,7 @@ def dataframes_from_txt(summaries_path):
     # Junta tudo numa tabela só e retorna.
     return reduce(lambda df1, df2: df1.union(df2), dataframes)
 
+
 def get_csv_in_folder(file_path):
     """Search for a .csv file in a given path. It must find just one .csv file - this constraint is tested with assert command.
     This is an auxiliar function used during reading .csv PySpark DataFrames.
@@ -87,12 +89,14 @@ def get_csv_in_folder(file_path):
 
     return os.path.join(file_path, files[0])
 
+
 def read_table_file(file_path, sep, has_header):
     return ss()\
         .read\
         .option('header', has_header)\
         .option('sep', sep)\
         .csv(file_path)
+
 
 def to_csv(df, target_folder, num_files=1, sep=','):
     """Saves a PySpark Dataframe into .csv file.
@@ -138,6 +142,7 @@ def rename_csv_in_folder(directory: str, new_filename: str):
     except Exception as e:
         print(f"Ocorreu um erro inesperado: {e}")
 
+
 def get_wordnet_pos(treebank_tag):
     """Returns WORDNET POS compliance to WORDNET lemmatization (ADJ, VERB, NOUN, ADV)"""
 
@@ -153,6 +158,7 @@ def get_wordnet_pos(treebank_tag):
     # As default pos in lemmatization is Noun
         return 'n'
 
+
 def tokenize(data):
     """Tokenizes a sentence
 
@@ -164,6 +170,7 @@ def tokenize(data):
     else:
         return word_tokenize(data)
 
+
 def remove_last_digit(data):
     """Removes the last character of a string a sentence
 
@@ -172,6 +179,7 @@ def remove_last_digit(data):
     """
 
     return data[:-1]
+
 
 def return_last_digit(data):
     """Toeknizes a sentence
@@ -188,17 +196,20 @@ def return_last_digit(data):
 
     return aux
 
+
 def find_mesh_terms(disease_name):
     handle = Entrez.esearch(db="mesh", term=f"\"{disease_name}\"[MeSH Terms] ", retmax="20")
     record = Entrez.read(handle)
     handle.close()
     return record["IdList"]
 
+
 def get_mesh_details(mesh_id):
     handle = Entrez.efetch(db="mesh", id=mesh_id, retmode="xml")
     records = handle.read()
     handle.close()
     return records
+
 
 def get_mesh_disease_synonyms(disease_details):
     lines = disease_details.splitlines()
@@ -219,6 +230,7 @@ def get_mesh_disease_synonyms(disease_details):
                 term = line
             synonyms.append(term.lower())
     return synonyms
+
 
 def summary_column_preprocessing(column, target_disease):
     """Executes initial preprocessing in a PySpark text column. It removes some unwanted regex from the text.
@@ -256,6 +268,7 @@ def summary_column_preprocessing(column, target_disease):
     column = F.lower(column)
 
     return column
+
 
 def words_preprocessing(df, column='word'):
     """Corrige alguns erros de digitação, normaliza alguns símbolos e remove palavras irrelevantes."""
@@ -352,64 +365,49 @@ def words_preprocessing(df, column='word'):
             .where(F.length(F.col(column)) > F.lit(1))\
             .where(~F.col(column).isin(nltk.corpus.stopwords.words('english')))
 
+
 def main():
     target_disease = get_target_disease()
     normalized_target_disease = get_normalized_target_disease()
 
-    # Baixando conjuntos relevantes de palavras.
+    # Downloads NLTK data files if they are not already present.
     nltk.download('wordnet', quiet=True)
     nltk.download('punkt', quiet=True)
     nltk.download('averaged_perceptron_tagger', quiet=True)
     nltk.download('omw-1.4', quiet=True)
     nltk.download('stopwords', quiet=True)
 
-    CLEAN_PAPERS_PATH = f'./data/{normalized_target_disease}/corpus/clean_abstracts'
-    AGGREGATED_ABSTRACTS_PATH = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts'
-    SYNONYM_ENTITIES = [x.lower() for x in ['Drug', 'Clinical_Drug', 'Pharmacologic_Substance']]
+    clean_papers_path = f'./data/{normalized_target_disease}/corpus/clean_abstracts'
+    aggregated_abstracts_path = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts'
 
-    # Cria a sessão do pyspark.
+    # Creates pyspark session.
     ss()
 
-    # Cria janelas de agregação que definem critérios para agrupamento de linhas dos dataframes.
-    w1 = Window.partitionBy(F.col('summary')).orderBy(F.col('filename'))
+    # Creates a window that will be used to group the words by article.
     w2 = Window.partitionBy(F.col('filename'), F.col('id')).orderBy(F.col('pos'))
 
-    print('Preprocessing text for Word2Vec models')
+    print('Preprocessing text for Word2Vec models.')
 
-    #####################################################################
-    # PASSO 1
-    # se for desejado substituir os compostos/drogas a partir de dados do PubChem:
-        # cria a tabela de sinonimos. A primeira coluna contém o sinônimo do composto e a segunda coluna contém o nome (título) do composto ao qual aquele sinônimo se refere.
-        # a coluna com os nomes dos sinônimos é transformada (sofre processamento), enquanto o título é apenas transformado em letras minúsculas
-        # o grau da tabela original não é alterado. Ou seja, mantém-se a proporção 1 linha = 1 sinônimo
-
-    # se o processamento do texto estiver sendo feito para treinamento de futuros modelos Word2Vec:
-        # também é realizada a leitura do arquivo de texto que contém as palavras mais comuns do inglês. Esse arquivo é transformado em um DataFrame, removendo-se aquelas palavras selecionadas para o processo de validação
-        # o DataFrame de palavras em inglês será usado para remover tais palavras do texto, antes do treinamento dos modelos.
-    #####################################################################
-
-    # Cria tabela de sinônimos (cid | sinônimo).
+    # Creates synonym table from PubChem data (cid | synonym).
     synonyms = read_table_file('data/pubchem_data/CID-Synonym-filtered', '\t', 'false')
     synonyms = synonyms.withColumnRenamed("_c0", "cid")\
                         .withColumnRenamed("_c1", "synonym")
 
-    # Cria tabela de nomes principais (cid | nome).
+    # Creates title table from PubChem data (cid | title). Will be used to normalize synonyms.
     titles = read_table_file('data/pubchem_data/CID-Title', '\t', 'false')
     titles = titles.withColumnRenamed("_c0", "cid")\
                     .withColumnRenamed("_c1", "title")
 
-    # Cria tabela NER, que identifica o que cada termo é.
+    # Reads the NER table.
     ner_df = read_table_file(f'./data/{normalized_target_disease}/corpus/ner_table.csv', ',', 'true')
+    if not ner_df:
+        print('NER table not found. Have you run step 3?')
+        return
 
-    print('ner_df:')
+    print('NER table:')
     ner_df.show(truncate=False)
 
-
-    ## se a normalização de sinônimos for ser realizada para futuro treinamento de modelos Word2vec, o Dataframe de sinônimos deve ser unido (join) ao Dataframe de palavras comuns do inglês,
-    ## pois elas serão removidas do texto:
-
-
-    # Junta as tabelas de sinônimo e nome.
+    # Joins the synonyms with their titles. Now we have a table with (synonym | synonym_title).
     synonyms = synonyms\
             .withColumn('synonym', F.regexp_replace(F.lower(F.col('synonym')), r'\s+', ''))\
             .groupby('synonym')\
@@ -418,41 +416,30 @@ def main():
             .withColumn('synonym_title', F.regexp_replace(F.lower(F.col('title')), r'\s+', ''))\
             .select('synonym', 'synonym_title')
 
-
-    ## independentemente de qual o futuro modelo a ser treinado, se houver noralização de sinônimos, o Dataframe de sinônimos é unido com o NER,
-    ## para que haja a normalização apenas de palavras identificadas como drogas/compostos/fármacos:
-
-    # Tira dos sinônimos as linhas que contêm nome duplicado (sinônimo = nome), junta o tipo NER na tabela.
+    # Removes synonyms that are the same as their titles.
+    # Joins the synonyms with the NER table to filter out words that don't show up in the corpus.
+    # This is done as a performance optimization, the PubChem tables are huge.
     synonyms = synonyms\
                 .where(F.col('synonym') != F.col('synonym_title'))\
                 .join(ner_df, F.col('synonym') == F.col('token'), 'inner')\
                 .drop(*('token', 'entity'))
 
-    #####################################################################
-    # PASSO 2
-    # cria o DataFrame de artigos limpos/processados. Cada linha dessa tabela equivale a um artigo.
-    # a tabela tem três colunas: filename, id, summary
-    #       "filename" é o nome do arquivo de onde o artigo foi retirado (results_aggregated), ou seja, é o ano de publicação do artigo.
-    #       "id" é uma coluna serial, apenas para contagem/identificação
-    #       "summary" é o próprio texto (título e/ou prefácio do artigo) limpo/processado.
-    #####################################################################
-
-    # Carrega os abstracts e salva como uma tabela (filename | id | summary), cada linha representa um artigo.
-    cleaned_documents = dataframes_from_txt(AGGREGATED_ABSTRACTS_PATH)
-    print('Abstracts originais:')
+    # Loads the aggregated abstracts from the corpus, creates an (id | filename | summary) table.
+    cleaned_documents = dataframes_from_txt(aggregated_abstracts_path)
+    print('Before any preprocessing:')
     cleaned_documents.show(truncate=False)
 
-    # Pré-processa cada linha e separa cada palavra numa linha diferente da tabela.
-    # Esse pré-processamento é basicamente a remoção de caracteres e strings especiais e substituição de sinônimos.
+    # Preprocesses each line and separates each word into a different line in the table.
+    # This preprocessing step is basically the removal of special characters and strings, along with synonym normalization.
     cleaned_documents = cleaned_documents\
                         .withColumn('summary', summary_column_preprocessing(F.col('summary'), target_disease))\
                         .select('id', 'filename', F.posexplode(F.split(F.col('summary'), ' ')).alias('pos', 'word'))
 
-    print('Após summary_column_preprocessing:')
+    print('After summary_column_preprocessing:')
     cleaned_documents.show(truncate=False)
 
-    # Pré-processa mais uma vez, corrigindo erros de digitação e normalizando algumas coisas.
-    # Concatena as palavras do mesmo abstract numa linha só, revertendo o posexplode.
+    # Preprocesses again, this time removing stopwords and normalizing the words.
+    # Reverts the posexplode so that each abstract is in a single line again.
     cleaned_documents = words_preprocessing(cleaned_documents)\
                         .withColumn('summary', F.collect_list('word').over(w2))\
                         .groupby('id', 'filename')\
@@ -460,18 +447,10 @@ def main():
                             F.concat_ws(' ', F.max(F.col('summary'))).alias('summary')
                         )
 
-    print('Após words_preprocessing:')
+    print('After words_preprocessing:')
     cleaned_documents.show(truncate=False)
 
-    #####################################################################
-    # PASSO 3
-    # se o texto estiver sendo processado para modelos BERT, NÃO é realizada a lemmatização dos verbos e advérbios
-    # caso contrário, é realizada a lemmatização <- (onde?)
-    # em ambos os casos, o texto (summary) é tokenizado nos espaços em branco, formando uma linha do Dataframe para cada token
-    # esse novo Dataframe - com os tokens - será utilizado para união (join) com o dataframe de sinônimos
-    #####################################################################
-
-    # Separa as palavras em linhas diferentes de novo.
+    # Separates the words again.
     df = cleaned_documents\
         .select(
             'id',
@@ -479,31 +458,28 @@ def main():
             F.posexplode(F.split(F.col('summary'), ' ')).alias('pos', 'word')
         )
 
-    print('Após primeiro posexplode:')
-    df.show(truncate=False)
-
-    # Renomeia a coluna "word" para "word_n".
     df = df\
         .withColumnRenamed('word', 'word_n')
 
     df.show(n=60, truncate=False)
 
-    # Junta com a tabela de sinônimos.
-    # Assim, sempre que a palavra for um sinônimo de x, o campo synonym_title será x, caso contrário, null.
+
+    # Joins the word table with the synonyms table.
+    # If the word is a synonym, there will be something in the title column. Otherwise, it will be null.
     df = df\
         .join(synonyms, F.col('synonym') == F.lower(F.col('word_n')), 'left')\
         .distinct()
 
     df.show(truncate=False)
 
-    # Troca os sinônimos pelos termos normalizados.
+    # Swaps synonyms for their titles.
     matched_synonyms = df\
         .where(F.col('synonym_title').isNotNull())\
         .select(F.col('synonym'), F.col('synonym_title'))\
         .distinct()\
         .where(F.col('synonym') != F.col('synonym_title'))
 
-    # Junta as palavras e forma os abstracts pré-processados.
+    # Aggregates the words to form the whole abstracts again, but now they're preprocessed.
     df = df\
         .withColumn('word', F.coalesce(F.col('synonym_title'), F.col('word_n')))\
         .drop(*('synonym', 'synonym_title', 'word_n'))\
@@ -513,18 +489,17 @@ def main():
             F.concat_ws(' ', F.max(F.col('summary'))).alias('summary')
         )
 
-    print('Final - após possível normalização de sinônimos:')
+    print('Final DataFrame:')
     df = df.withColumn('id', F.monotonically_increasing_id())
     df.show(n=60, truncate=False)
 
-    # Escreve os .csv.
-    print('Escrevendo csv')
-    to_csv(df, target_folder=CLEAN_PAPERS_PATH)
-    rename_csv_in_folder(CLEAN_PAPERS_PATH, 'clean_abstracts.csv')
+    # Writes the clean abstracts to a CSV file.
+    print('Writing CSV...')
+    to_csv(df, target_folder=clean_papers_path)
+    rename_csv_in_folder(clean_papers_path, 'clean_abstracts.csv')
 
     df.printSchema()
     print('END!')
-    exit(0)
 
 if __name__ == '__main__':
     main()
