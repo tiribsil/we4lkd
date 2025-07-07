@@ -7,162 +7,118 @@ from src.target_disease import *
 
 os.chdir(Path(__file__).resolve().parent.parent)
 
-FINAL_PROCESSING_YEAR = 2025
-
-RELEVANT_SPACY_ENTITY_TYPES = ['CHEMICAL']
-MAPPED_ENTITY_TYPE = 'pharmacologic_substance'
 
 target_disease = get_target_disease()
 normalized_target_disease = get_normalized_target_disease()
 
-OUTPUT_NER_CSV_PATH = f'./data/{normalized_target_disease}/corpus/ner_table.csv'
-INPUT_ABSTRACTS_PATH = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts'
-
 def load_spacy_model():
+    """
+    Loads the spaCy NER model for biomedical named entity recognition.
+    Returns:
+        The loaded spaCy model if successful.
+    """
+
     spacy.require_gpu()
     try:
         nlp = spacy.load("en_ner_bc5cdr_md")
-        print(f"Modelo spaCy 'en_ner_bc5cdr_md' carregado. Usando GPU: {spacy.prefer_gpu()}")
+        print(f"'en_ner_bc5cdr_md' spaCy model loaded. Using GPU: {spacy.prefer_gpu()}")
         return nlp
     except OSError:
-        print("AVISO: Modelo 'en_ner_bc5cdr_md' não encontrado. Tentando 'en_core_web_sm'.")
-        try:
-            nlp = spacy.load("en_core_web_sm")
-            print(f"Modelo spaCy 'en_core_web_sm' carregado. Usando GPU: {spacy.prefer_gpu()}")
-            print("AVISO: RELEVANT_SPACY_ENTITY_TYPES pode precisar de ajuste para 'en_core_web_sm'.")
-            return nlp
-        except OSError:
-            print("ERRO CRÍTICO: Nenhum modelo spaCy funcional encontrado.")
-            return None
-
-
-def get_year_from_filename(filename_str):
-    try:
-        parts = filename_str.split('_')
-        # Espera-se 'results_file_YYYY_YYYY.txt' ou 'results_file_YYYY.txt' (se for um único ano)
-        # Vamos pegar o último ano mencionado no nome do arquivo para o filtro
-        if len(parts) >= 4 and parts[-1].replace('.txt', '').isdigit():  # Formato results_file_START_END.txt
-            return int(parts[-1].replace('.txt', ''))
-        elif len(parts) >= 3 and parts[-1].replace('.txt', '').isdigit():  # Formato results_file_YEAR.txt
-            return int(parts[-1].replace('.txt', ''))
-        return None  # Formato de nome de arquivo não esperado
-    except ValueError:
+        print("'en_ner_bc5cdr_md' model not found. Please, download it.")
         return None
 
 
-def process_abstracts_from_files(nlp_model):
-    input_folder_path = Path(INPUT_ABSTRACTS_PATH)
+def process_abstracts_from_file(nlp_model):
+    """
+    Generates a table of named entities from abstracts.
+    Args:
+        nlp_model: SpaCy NER model.
+
+    Returns:
+        ner_results: List of dictionaries with 'token' and 'entity' keys.
+    """
+    relevant_spacy_entity_types = ['CHEMICAL']
+    mapped_entity_type = 'pharmacologic_substance'
+
+    input_folder_path = Path(f'./data/{normalized_target_disease}/corpus/aggregated_abstracts')
     if not input_folder_path.exists() or not input_folder_path.is_dir():
-        print(f"ERRO: Pasta de entrada não encontrada: {input_folder_path}")
         return []
 
     all_filenames = sorted([str(x) for x in input_folder_path.glob('*.txt')])
 
-    # Filtra os arquivos para encontrar o mais recente que atenda ao critério de ano final.
-    candidate_files = []
-    for f_path_str in all_filenames:
-        file_year = get_year_from_filename(Path(f_path_str).name)
-        if file_year is not None and file_year <= FINAL_PROCESSING_YEAR:
-            candidate_files.append(f_path_str)
-        elif file_year is None:
-            print(f"AVISO: Não foi possível determinar o ano do arquivo {Path(f_path_str).name}. Incluindo por padrão.")
-            candidate_files.append(f_path_str)  # Inclui se não puder determinar o ano
+    file_to_process = all_filenames[-1]
 
-    if not candidate_files:
-        print(f"AVISO: Nenhum arquivo .txt encontrado em {input_folder_path} até o ano {FINAL_PROCESSING_YEAR}.")
-        return []
-
-    last_cumulative_file = candidate_files[-1]
-    filenames_to_process = [last_cumulative_file]
-
-    print(f"Optimized Processing: Reading only the final cumulative file up to year {FINAL_PROCESSING_YEAR}:")
-    print(f"  -> {Path(last_cumulative_file).name}")
+    print(f"Reading {file_to_process}...")
 
     ner_results = []
     texts_to_process_batch = []
     batch_size = 500
 
-    for file_path_str in filenames_to_process:
-        file_path = Path(file_path_str)
-        print(f"Lendo arquivo: {file_path.name}...")
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for line_number, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line:
-                        continue
+    # Goes through each line (abstract) in the file, processes the text in batches, and saves the NER results in a list.
+    with open(file_to_process, 'r', encoding='utf-8') as f:
+        for line_number, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
 
-                    parts = line.split('|', 1)
-                    if len(parts) == 2:
-                        title, abstract = parts
-                        texts_to_process_batch.append(title)
-                        texts_to_process_batch.append(abstract)
-                    elif len(parts) == 1:
-                        texts_to_process_batch.append(parts[0])
-                    else:
-                        print(f"  AVISO: Linha {line_number} em {file_path.name} mal formatada: '{line[:100]}...'")
-                        continue
+            parts = line.split('|', 1)
+            if len(parts) == 2:
+                title, abstract = parts
+                texts_to_process_batch.append(abstract)
+            elif len(parts) == 1:
+                texts_to_process_batch.append(parts[0])
+            else:
+                print(f"Warning: Line {line_number} in {file_to_process} has formatting issues: '{line[:100]}...'")
+                continue
 
-                    if len(texts_to_process_batch) >= batch_size:
-                        for doc in nlp_model.pipe(texts_to_process_batch, disable=["parser", "lemmatizer"]):
-                            for ent in doc.ents:
-                                if ent.label_ in RELEVANT_SPACY_ENTITY_TYPES:
-                                    ner_results.append({
-                                        'token': ent.text.lower(),
-                                        'entity': MAPPED_ENTITY_TYPE
-                                    })
-                        texts_to_process_batch = []
-            print(f"  Arquivo {file_path.name} lido.")
-        except Exception as e:
-            print(f"  ERRO ao processar o arquivo {file_path.name}: {e}")
-            continue
+            if len(texts_to_process_batch) < batch_size: continue
+
+            for doc in nlp_model.pipe(texts_to_process_batch, disable=["parser", "lemmatizer"]):
+                for ent in doc.ents:
+                    if ent.label_ in relevant_spacy_entity_types:
+                        ner_results.append({
+                            'token': ent.text.lower(),
+                            'entity': mapped_entity_type
+                        })
+            texts_to_process_batch = []
 
     if texts_to_process_batch:
         for doc in nlp_model.pipe(texts_to_process_batch, disable=["parser", "lemmatizer"]):
             for ent in doc.ents:
-                if ent.label_ in RELEVANT_SPACY_ENTITY_TYPES:
+                if ent.label_ in relevant_spacy_entity_types:
                     ner_results.append({
                         'token': ent.text.lower(),
-                        'entity': MAPPED_ENTITY_TYPE
+                        'entity': mapped_entity_type
                     })
 
     return ner_results
 
 def main():
+    output_ner_csv_path = f'./data/{normalized_target_disease}/corpus/ner_table.csv'
+
+    # Loads the spaCy NER model.
     nlp = load_spacy_model()
     if nlp is None:
         return
 
     Path(f"./data/{normalized_target_disease}").mkdir(parents=True, exist_ok=True)
 
-    print(f"Iniciando processamento NER para a doença: {target_disease} (pasta: {INPUT_ABSTRACTS_PATH})")
-    print(f"Processando arquivos até o ano (inclusive): {FINAL_PROCESSING_YEAR}")
-
-    ner_data = process_abstracts_from_files(nlp)
-
+    # Generates NER data based on the latest aggregated abstracts file (contains every abstract from corpus).
+    print(f"Starting NER table generation for {target_disease}.")
+    ner_data = process_abstracts_from_file(nlp)
     if not ner_data:
-        print("Nenhuma entidade NER relevante foi extraída.")
+        print(f"Aggregated abstracts not found. Have you run step 2?")
         return
 
+    # Creates a DataFrame from the NER data and removes duplicates.
     ner_df = pd.DataFrame(ner_data).drop_duplicates().reset_index(drop=True)
 
-    if ner_df.empty:
-        print("DataFrame NER vazio após remoção de duplicatas.")
-        return
-
-    print(f"\nTotal de {len(ner_df)} entidades NER únicas encontradas (tipo: {MAPPED_ENTITY_TYPE}).")
-    print("Amostra da tabela NER gerada:")
+    print(f"{len(ner_df)} NER tokens found.")
     print(ner_df.head())
 
-    try:
-        ner_df.to_csv(OUTPUT_NER_CSV_PATH, index=False)
-        print(f"\nTabela NER salva com sucesso em: {OUTPUT_NER_CSV_PATH}")
-    except Exception as e:
-        print(f"ERRO ao salvar o arquivo CSV: {e}")
+    ner_df.to_csv(output_ner_csv_path, index=False)
+    print(f"NER table saved at {output_ner_csv_path}.")
 
 
 if __name__ == '__main__':
-    if not Path("target_disease.py").exists():
-        print("ERRO: O arquivo 'target_disease.py' não foi encontrado.")
-    else:
-        main()
+    main()
