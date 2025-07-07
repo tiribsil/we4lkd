@@ -1,6 +1,8 @@
 import glob
+import itertools
 import json
 import os
+from pathlib import Path
 from time import sleep
 
 import pandas as pd
@@ -10,7 +12,7 @@ from api_key import MY_API_KEY
 from target_disease import target_disease, normalized_target_disease
 
 
-def extract_co_occurrence_contexts(corpus_df, target_chemical, target_disease, window_size=20):
+def extract_co_occurrence_contexts(corpus_df, target_chemical, target_disease, year, window_size=20):
     """
     Extrai janelas de texto (pseudo-sentenças) onde um chemical e uma doença coocorrem.
 
@@ -28,7 +30,9 @@ def extract_co_occurrence_contexts(corpus_df, target_chemical, target_disease, w
     evidence_sentences = []
 
     # Processa cada resumo (linha) no DataFrame
-    for summary in corpus_df['summary'].dropna():
+    for index, line in corpus_df.dropna().iterrows():
+        if int(line['filename'][-4:]) > year: continue
+        summary = line['summary']
         words = summary.split()
 
         # Encontra todos os índices onde o chemical aparece no resumo
@@ -101,6 +105,18 @@ def sort_by_rank(sentences_by_compound, target_disease_name):
         )
     return sorted_sentences
 
+def sort_by_sentences(sentences_by_compound):
+    """
+    Ordena os compostos com base no número de sentenças associadas a cada um.
+
+    Args:
+        sentences_by_compound (dict): Dicionário onde as chaves são compostos e os valores são listas de sentenças.
+
+    Returns:
+        dict: Dicionário ordenado por número de sentenças, do maior para o menor.
+    """
+    return dict(sorted(sentences_by_compound.items(), key=lambda item: len(item[1]), reverse=True))
+
 def explanation_for_chemical(chemical, sentences, n_sentences=3):
     client = genai.Client(api_key=MY_API_KEY)
 
@@ -114,70 +130,81 @@ def explanation_for_chemical(chemical, sentences, n_sentences=3):
     for sentence in sentences[:n_sentences]:
         prompt += f"\n- {sentence}"
 
-    response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+    response = client.models.generate_content(model='gemini-2.5-flash-lite-preview-06-17', contents=prompt)
 
     return response.text
 
 if __name__ == '__main__':
     MODEL_TYPE = 'w2v' # Deve ser 'w2v' ou 'ft'
-    MODEL_YEAR = '2025'
     n_sentences = 3
+    n_compounds = 10
 
     if MODEL_TYPE not in ['w2v', 'ft']:
         raise ValueError("MODEL_TYPE deve ser 'w2v' ou 'ft'.")
 
     sentences_dir_path = f'./data/{normalized_target_disease}/validation/per_compound/{MODEL_TYPE}_sentences'
-    sentences_file_path = f'{sentences_dir_path}/sentences_{MODEL_YEAR}.json'
-    os.makedirs(sentences_dir_path, exist_ok=True)
 
-    sentences_by_compound = {}
-    if os.path.exists(sentences_file_path):
-        print(f"Arquivo de cache encontrado.")
-        with open(sentences_file_path, 'r', encoding='utf-8') as f:
-            sentences_by_compound = json.load(f)
-    else:
-        top_n_directory = f'./data/{normalized_target_disease}/{MODEL_TYPE}'
+    # Pega os nomes de todos os arquivos que vieram do crawler.
+    aggregated_files = sorted(
+        list(map(str, Path(f'./data/{normalized_target_disease}/aggregated_results').glob('*.txt'))))
 
-        metrics = [
-            'dot_product_result_absolute',
-            'softmax',
-            'softmax_normalization',
-            'softmax_standardization'
-        ]
+    # Define a faixa de anos a ser processada
+    year_range = int(Path(aggregated_files[0]).stem[-4:]), int(Path(aggregated_files[-1]).stem[-4:])
+    start_year = year_range[0]
+    end_year = year_range[1]
 
-        candidate_compounds = []
-        file_pattern = f'{top_n_directory}/top_*.csv'
-        files = glob.glob(file_pattern)
+    for year in range(start_year, end_year + 1):
+        sentences_file_path = f'{sentences_dir_path}/sentences_{year}.json'
+        os.makedirs(sentences_dir_path, exist_ok=True)
 
-        for file in files:
-            df = pd.read_csv(file)
-            candidate_compounds.extend(df['chemical_name'].tolist())
+        sentences_by_compound = {}
+        if os.path.exists(sentences_file_path):
+            print(f"Arquivo de cache encontrado.")
+            with open(sentences_file_path, 'r', encoding='utf-8') as f:
+                sentences_by_compound = sort_by_sentences(json.load(f))
+        else:
+            top_n_directory = f'./data/{normalized_target_disease}/{MODEL_TYPE}/{year}'
 
-        candidate_compounds = list(set(candidate_compounds))
-        clean_results_df = pd.read_csv(f'./data/{normalized_target_disease}/clean_results/clean_results.csv')
+            metrics = [
+                'dot_product_result_absolute',
+                'softmax',
+                'softmax_normalization',
+                'softmax_standardization'
+            ]
 
-        print(f"Arquivo de cache não encontrado. Processando sentenças do zero...")
+            candidate_compounds = []
+            file_pattern = f'{top_n_directory}/top_*.csv'
+            files = glob.glob(file_pattern)
 
-        for compound in candidate_compounds:
-            sentences = extract_co_occurrence_contexts(clean_results_df, compound, normalized_target_disease, window_size=20)
-            if len(sentences) < n_sentences: continue
-            print(f'{len(sentences)} sentences for {compound}')
-            sentences_by_compound[compound] = sentences
+            for file in files:
+                df = pd.read_csv(file)
+                candidate_compounds.extend(df['chemical_name'].tolist())
 
-        sentences_by_compound = sort_by_rank(sentences_by_compound, normalized_target_disease)
+            candidate_compounds = list(set(candidate_compounds))
+            clean_results_df = pd.read_csv(f'./data/{normalized_target_disease}/clean_results/clean_results.csv')
 
-        print(f"Salvando resultados processados em '{sentences_dir_path}'...")
-        with open(sentences_file_path, 'w', encoding='utf-8') as f:
-            json.dump(sentences_by_compound, f, indent=4, ensure_ascii=False)
+            print(f"Arquivo de cache não encontrado. Processando sentenças do zero...")
 
-    with open(f'{sentences_dir_path}/xai_{MODEL_YEAR}.txt', 'w', encoding='utf-8') as f:
-        xai_output = ''
-        for compound, sentences in sentences_by_compound.items():
-            explanation = explanation_for_chemical(compound, sentences, n_sentences)
-            xai_output += f'Explanation for {compound}:\n{explanation}\n'
-            sleep(30)
-        f.write(xai_output)
-        print(xai_output)
+            for compound in candidate_compounds:
+                sentences = extract_co_occurrence_contexts(clean_results_df, compound, normalized_target_disease, year, window_size=20)
+                if len(sentences) < n_sentences: continue
+                print(f'{len(sentences)} sentences for {compound}')
+                sentences_by_compound[compound] = sentences
+
+            sentences_by_compound = sort_by_sentences(sort_by_rank(sentences_by_compound, normalized_target_disease))
+
+            print(f"Salvando resultados processados em '{sentences_dir_path}'...")
+            with open(sentences_file_path, 'w', encoding='utf-8') as f:
+                json.dump(sentences_by_compound, f, indent=4, ensure_ascii=False)
+
+        with open(f'{sentences_dir_path}/xai_{year}.txt', 'w', encoding='utf-8') as f:
+            xai_output = ''
+            for compound, sentences in itertools.islice(sentences_by_compound.items(), n_compounds):
+                explanation = explanation_for_chemical(compound, sentences, n_sentences)
+                xai_output += f'Explanation for {compound}:\n{explanation}\n'
+                sleep(30)
+            f.write(xai_output)
+            print(xai_output)
 
 
 
