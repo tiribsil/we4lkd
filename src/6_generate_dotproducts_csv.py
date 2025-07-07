@@ -3,17 +3,18 @@
 ##################################################
 
 # IMPORTS:
-import os, torch, sys, shutil
+import os, torch, shutil
 import re
 from pathlib import Path
 
 from gensim.models import Word2Vec, FastText
 import numpy as np
+from nltk import word_tokenize
 from scipy.special import softmax
 import pandas as pd
-from transformers import AutoTokenizer, AutoModelForMaskedLM
+from transformers import AutoTokenizer
 
-from target_disease import target_disease, normalized_target_disease
+from src.target_disease import *
 
 os.chdir(Path(__file__).resolve().parent.parent)
 
@@ -55,6 +56,7 @@ def get_token_embedding(word, embedding_matrix, method='mean'):
     for w in tokenized_word:
         vocab_ids.append(tokenizer.vocab[w])
 
+    word_token_embedding = None
     if method == 'mean':
         input_ids = torch.tensor(vocab_ids)
         word_token_embedding = embedding_matrix(input_ids)
@@ -71,7 +73,7 @@ def get_token_embedding(word, embedding_matrix, method='mean'):
     return word_token_embedding
 
 
-def generate_compound_historical_record(compound):
+def generate_compound_historical_record(compound, normalized_target_disease, c):
     for method in ['first', 'last', 'mean']:
         bert_embeddings_files = sorted(
             [f.path for f in os.scandir(f'./{normalized_target_disease}/validation/bert/') if f.name.endswith('.pt') and method in f.name])
@@ -190,7 +192,7 @@ def get_w2v_output_embedding(word, model, method):
         raise ValueError(f"Método '{method}' inválido. Escolha 'da' ou 'avg'.")
 
 
-def get_compounds():
+def get_compounds(normalized_target_disease):
     pubchem_path = 'data/pubchem_data/CID-Title'
     ner_table_path = f'./data/{normalized_target_disease}/corpus/ner_table.csv'
 
@@ -226,7 +228,10 @@ def get_compounds():
     # Retorna a lista final de nomes já normalizados
     return validated_normalized_compounds
 
-if __name__ == '__main__':
+def main():
+    target_disease = get_target_disease()
+    normalized_target_disease = get_normalized_target_disease()
+
     print('Starting')
 
     # Loads all compounds present in the corpus.
@@ -414,3 +419,6 @@ if __name__ == '__main__':
         )
 
     print('End :)')
+
+if __name__ == '__main__':
+    main()

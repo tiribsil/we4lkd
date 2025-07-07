@@ -14,25 +14,21 @@
 """
 #######################################################
 
-import os, re, sys, shutil, itertools
+import os, shutil
 
-import gensim
-from gensim.utils import RULE_KEEP, RULE_DEFAULT
 from gensim.models import Word2Vec, FastText
 from pathlib import Path
-from os import listdir
 import pandas as pd
-import numpy as np
-from target_disease import target_disease, normalized_target_disease
+from src.target_disease import *
 
 os.chdir(Path(__file__).resolve().parent.parent)
 
 def list_from_txt(file_path):
-    '''Creates a list of itens based on a .txt file, each line becomes an item.
-    
-    Args: 
-      file_path: the path where the .txt file was created. 
-    '''
+    """Creates a list of itens based on a .txt file, each line becomes an item.
+
+    Args:
+      file_path: the path where the .txt file was created.
+    """
     
     strings_list = []
     with open (file_path, 'rt', encoding='utf-8') as file:
@@ -53,33 +49,30 @@ def clear_folder(dirpath):
         except OSError:
             os.remove(filepath)
 
-if __name__ == '__main__':
+def main():
+    normalized_target_disease = get_normalized_target_disease()
+
     w2v_path = f'./data/{normalized_target_disease}/models/w2v_combination15/'
     ft_path = f'./data/{normalized_target_disease}/models/ft_combination16/'
 
     print('Starting script')
 
     # CONSTANTS:
-    MODEL_TYPE = 'w2v' # 'w2v' for Word2Vec or 'ft' for FastText
-    if MODEL_TYPE not in ['w2v', 'ft']:
-        raise ValueError("MODEL_TYPE must be either 'w2v' or 'ft'")
+    model_type = 'w2v' # 'w2v' for Word2Vec or 'ft' for FastText
+    if model_type not in ['w2v', 'ft']:
+        raise ValueError("model_type must be either 'w2v' or 'ft'")
 
     # Cria as pastas para salvar os modelos e escolhe a combinação dos parâmetros.
     os.makedirs(w2v_path, exist_ok=True)
     os.makedirs(ft_path, exist_ok=True)
 
-    if MODEL_TYPE == 'w2v': parameters_combination = [[100, 0.0025, 10], [200, 0.025, 15]]
+    if model_type == 'w2v': parameters_combination = [[100, 0.0025, 10], [200, 0.025, 15]]
     else: parameters_combination = [[300, 0.0025, 5]]
 
     # Pega os dados do arquivo.
     print('Reading DataFrame of papers')
-    df = pd.read_csv(f'./data/{normalized_target_disease}/corpus/clean_abstracts/clean_abstracts.csv')
+    df = pd.read_csv(f'./data/{normalized_target_disease}/corpus/clean_abstracts/clean_abstracts.csv', names=['id', 'year_extracted', 'summary'])
     print(df.head())
-
-    # Pega os anos dos artigos.
-    df['year_extracted'] = pd.to_numeric(df.filename.str[-4:], errors='coerce')
-    df.dropna(subset=['year_extracted'], inplace=True)
-    df['year_extracted'] = df['year_extracted'].astype(int)
 
     years = sorted(df['year_extracted'].unique().tolist())
     first_year = years[0]
@@ -101,7 +94,7 @@ if __name__ == '__main__':
         abstracts = [x.split() for x in abstracts]
 
         # Treina os modelos :)
-        if MODEL_TYPE == 'w2v':
+        if model_type == 'w2v':
             model_comb15 = Word2Vec(
                 # constant parameters:
                 sentences=abstracts,
@@ -133,3 +126,6 @@ if __name__ == '__main__':
             model.save(f'{ft_path}/model_{first_year}_{r[-1]}.model')
 
     print('END!')
+
+if __name__ == '__main__':
+    main()

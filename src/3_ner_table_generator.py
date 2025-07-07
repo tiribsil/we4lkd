@@ -3,7 +3,7 @@ import os
 import spacy
 import pandas as pd
 from pathlib import Path
-from target_disease import target_disease, normalized_target_disease
+from src.target_disease import *
 
 os.chdir(Path(__file__).resolve().parent.parent)
 
@@ -11,6 +11,9 @@ FINAL_PROCESSING_YEAR = 2025
 
 RELEVANT_SPACY_ENTITY_TYPES = ['CHEMICAL']
 MAPPED_ENTITY_TYPE = 'pharmacologic_substance'
+
+target_disease = get_target_disease()
+normalized_target_disease = get_normalized_target_disease()
 
 OUTPUT_NER_CSV_PATH = f'./data/{normalized_target_disease}/corpus/ner_table.csv'
 INPUT_ABSTRACTS_PATH = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts'
@@ -55,21 +58,25 @@ def process_abstracts_from_files(nlp_model):
 
     all_filenames = sorted([str(x) for x in input_folder_path.glob('*.txt')])
 
-    filenames_to_process = []
+    # Filtra os arquivos para encontrar o mais recente que atenda ao critério de ano final.
+    candidate_files = []
     for f_path_str in all_filenames:
         file_year = get_year_from_filename(Path(f_path_str).name)
         if file_year is not None and file_year <= FINAL_PROCESSING_YEAR:
-            filenames_to_process.append(f_path_str)
+            candidate_files.append(f_path_str)
         elif file_year is None:
             print(f"AVISO: Não foi possível determinar o ano do arquivo {Path(f_path_str).name}. Incluindo por padrão.")
-            filenames_to_process.append(f_path_str)  # Inclui se não puder determinar o ano
+            candidate_files.append(f_path_str)  # Inclui se não puder determinar o ano
 
-    if not filenames_to_process:
+    if not candidate_files:
         print(f"AVISO: Nenhum arquivo .txt encontrado em {input_folder_path} até o ano {FINAL_PROCESSING_YEAR}.")
         return []
 
-    print(
-        f"Processando {len(filenames_to_process)} arquivos .txt até o ano {FINAL_PROCESSING_YEAR} de {input_folder_path}")
+    last_cumulative_file = candidate_files[-1]
+    filenames_to_process = [last_cumulative_file]
+
+    print(f"Optimized Processing: Reading only the final cumulative file up to year {FINAL_PROCESSING_YEAR}:")
+    print(f"  -> {Path(last_cumulative_file).name}")
 
     ner_results = []
     texts_to_process_batch = []
@@ -85,14 +92,14 @@ def process_abstracts_from_files(nlp_model):
                     if not line:
                         continue
 
-                    parts = line.split('|', 1)  # Dividir apenas no primeiro '|'
+                    parts = line.split('|', 1)
                     if len(parts) == 2:
                         title, abstract = parts
                         texts_to_process_batch.append(title)
                         texts_to_process_batch.append(abstract)
-                    elif len(parts) == 1:  # Apenas título ou abstract
+                    elif len(parts) == 1:
                         texts_to_process_batch.append(parts[0])
-                    else:  # Linha mal formatada
+                    else:
                         print(f"  AVISO: Linha {line_number} em {file_path.name} mal formatada: '{line[:100]}...'")
                         continue
 
@@ -104,13 +111,13 @@ def process_abstracts_from_files(nlp_model):
                                         'token': ent.text.lower(),
                                         'entity': MAPPED_ENTITY_TYPE
                                     })
-                        texts_to_process_batch = []  # Limpar lote
+                        texts_to_process_batch = []
             print(f"  Arquivo {file_path.name} lido.")
         except Exception as e:
             print(f"  ERRO ao processar o arquivo {file_path.name}: {e}")
             continue
 
-    if texts_to_process_batch:  # Processar o último lote restante
+    if texts_to_process_batch:
         for doc in nlp_model.pipe(texts_to_process_batch, disable=["parser", "lemmatizer"]):
             for ent in doc.ents:
                 if ent.label_ in RELEVANT_SPACY_ENTITY_TYPES:
@@ -120,7 +127,6 @@ def process_abstracts_from_files(nlp_model):
                     })
 
     return ner_results
-
 
 def main():
     nlp = load_spacy_model()

@@ -3,16 +3,11 @@ Entrez.email = "tirs@estudante.ufscar.br"
 
 from pathlib import Path
 import pyspark.sql.functions as F
-from pyspark.context import SparkContext
 from pyspark.sql.session import SparkSession
-from pyspark.sql.functions import udf
 from pyspark.sql.window import Window
-import pyspark.sql.types as T
-from target_disease import target_disease, normalized_target_disease
+from src.target_disease import *
 
-import string
 import nltk, os
-from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 
 from functools import reduce
@@ -38,9 +33,12 @@ def dataframes_from_txt(summaries_path):
     # Para cada arquivo no diretório...
     for file_path in filenames:
         # Pega o ano.
-        year_of_file = file_path\
-            .replace(os.path.join(summaries_path, 'results_file_1900_'), '')\
-            .replace('.txt', '')
+        try:
+            year_of_file = Path(file_path).stem.split('_')[-1]
+            int(year_of_file)  # Confirma que é um número
+        except (IndexError, ValueError):
+            print(f"Warning: Could not extract year from filename {Path(file_path).name}. Skipping.")
+            continue
 
         NATURE_FILTERED_WORDS_IN_TITLE = [
             'foreword', 'prelude', 'commentary', 'workshop', 'conference', 'symposium',
@@ -222,9 +220,10 @@ def get_mesh_disease_synonyms(disease_details):
             synonyms.append(term.lower())
     return synonyms
 
-def summary_column_preprocessing(column):
+def summary_column_preprocessing(column, target_disease):
     """Executes initial preprocessing in a PySpark text column. It removes some unwanted regex from the text.
     Args:
+        target_disease:
         column: the name of the column to be processed.
     """
     disease_details = get_mesh_details(find_mesh_terms(target_disease))
@@ -353,7 +352,10 @@ def words_preprocessing(df, column='word'):
             .where(F.length(F.col(column)) > F.lit(1))\
             .where(~F.col(column).isin(nltk.corpus.stopwords.words('english')))
 
-if __name__ == '__main__':
+def main():
+    target_disease = get_target_disease()
+    normalized_target_disease = get_normalized_target_disease()
+
     # Baixando conjuntos relevantes de palavras.
     nltk.download('wordnet', quiet=True)
     nltk.download('punkt', quiet=True)
@@ -443,7 +445,7 @@ if __name__ == '__main__':
     # Pré-processa cada linha e separa cada palavra numa linha diferente da tabela.
     # Esse pré-processamento é basicamente a remoção de caracteres e strings especiais e substituição de sinônimos.
     cleaned_documents = cleaned_documents\
-                        .withColumn('summary', summary_column_preprocessing(F.col('summary')))\
+                        .withColumn('summary', summary_column_preprocessing(F.col('summary'), target_disease))\
                         .select('id', 'filename', F.posexplode(F.split(F.col('summary'), ' ')).alias('pos', 'word'))
 
     print('Após summary_column_preprocessing:')
@@ -522,4 +524,7 @@ if __name__ == '__main__':
 
     df.printSchema()
     print('END!')
-    exit(0) # ADAPTANDO ATÉ AQUI! -------------------------------------------------------------------------------
+    exit(0)
+
+if __name__ == '__main__':
+    main()

@@ -1,44 +1,55 @@
-import os, string
+import os
 from pathlib import Path
+from src.target_disease import *
 
-from target_disease import normalized_target_disease
+def main():
+    normalized_target_disease = get_normalized_target_disease()
 
-os.chdir(Path(__file__).resolve().parent.parent)
-
-if __name__ == '__main__':
     source_path = f'./data/{normalized_target_disease}/corpus/raw_abstracts'
     destination_path = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts'
 
     # Pega os nomes de todos os arquivos que vieram do crawler.
     filenames = sorted(list(map(str, Path(source_path).glob('*.txt'))))
     if not filenames:
-        print('No files found')
+        print('No files found in raw_abstracts directory.')
         exit(0)
 
     os.makedirs(destination_path, exist_ok=True)
 
-    start_year = int(Path(filenames[0]).stem[:4])
-    end_year = int(Path(filenames[-1]).stem[:4])
+    try:
+        start_year = int(Path(filenames[0]).stem[:4])
+        end_year = int(Path(filenames[-1]).stem[:4])
+    except (ValueError, IndexError) as e:
+        print(f"Error: Could not determine start/end year from filenames in {source_path}.")
+        print("Filenames must start with 'YYYY_'. Example: '2023_my_article_title.txt'")
+        print(f"Details: {e}")
+        exit(1)
 
     # Para cada ano no intervalo...
     for year in range(start_year, end_year + 1):
-        # Pega os nomes dos arquivos de artigos que são do ano atual.
-        filenames_current_year = [f for f in filenames if Path(f).stem.startswith(str(year))]
+        # Pega os nomes dos arquivos de artigos publicados ATÉ o ano atual (lógica cumulativa)
+        filenames_in_range = [f for f in filenames if int(Path(f).stem[:4]) <= year]
 
-        # Se não tiver nenhum desse ano, vai para o próximo.
-        if not filenames_current_year:
+        # Se não tiver nenhum nesse intervalo, vai para o próximo.
+        if not filenames_in_range:
             continue
 
-        print(f'{len(filenames_current_year)} papers from {year}.\n')
+        print(f'Aggregating {len(filenames_in_range)} papers from {start_year} to {year}.')
 
-        # Pega os prefácios de todos os artigos desse ano.
-        abstracts = []
-        for fname in filenames:
-            with open(fname, encoding='utf-8') as infile:
-                abstracts.extend(infile.readlines())
-
-        # Junta tudo em um só arquivo texto.
+        # Junta tudo em um só arquivo texto, que representa o conhecimento até aquele ano.
+        # O nome do arquivo reflete o intervalo cumulativo.
         output_file = f'{destination_path}/results_file_{start_year}_{year}.txt'
-        with open(output_file, 'w', encoding='utf-8') as f:
-            for fname, abstract in zip(filenames, abstracts):
-                f.write(f"{Path(fname).stem[5:]}|{abstract}\n")
+        with open(output_file, 'w', encoding='utf-8') as f_out:
+            for fname in filenames_in_range:
+                try:
+                    with open(fname, 'r', encoding='utf-8') as f_in:
+                        content = f_in.read().strip().replace('\n', ' ')
+                        title = Path(fname).stem[5:].replace('_', ' ').capitalize()
+                        f_out.write(f"{title}|{content}\n")
+
+                except Exception as e:
+                    print(f"  Warning: Could not process file {fname}. Error: {e}")
+
+
+if __name__ == '__main__':
+    main()

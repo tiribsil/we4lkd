@@ -1,16 +1,15 @@
 import os
-import string
 from time import sleep
 
 from Bio import Entrez
 from pathlib import Path
 from google import genai
-from lark.load_grammar import find_grammar_errors
 
 from api_key import MY_API_KEY
-from target_disease import target_disease, normalized_target_disease
+from src.target_disease import *
 from lark import Lark, LarkError
 
+# This makes sure the script runs from the root of the project, so relative paths work correctly.
 os.chdir(Path(__file__).resolve().parent.parent)
 
 def list_from_txt(file_path):
@@ -145,20 +144,25 @@ def canonize_disease_name(disease):
 
     return response.text
 
-def grammar_testing(iterations):
+def grammar_testing(iterations, target_disease):
     for i in range(iterations):
         query = generate_query(target_disease)
         print(query)
         sleep(30)
 
-if __name__ == '__main__':
+def main():
     # This is for the final version of the program. For now, we will use a hardcoded target disease as it's easier to test.
-    #target_disease = input('Enter a target disease: ')
-    #target_disease = canonize_disease_name(target_disease)
-    #print(f'Canonical name for target disease: {target_disease}')
+    target_disease = get_target_disease() # input('Enter a target disease: ')
+    normalized_target_disease = get_normalized_target_disease()
 
-    DESTINATION_DIR = f'./data/{normalized_target_disease}/corpus/raw_abstracts'
-    DOWNLOADED_PAPERS_IDS_FILE = f'./data/{normalized_target_disease}/corpus/ids.txt'
+    target_disease = canonize_disease_name(target_disease)
+    set_target_disease(target_disease)
+    print(f'Target disease: {target_disease}')
+
+    raw_abstracts_path = f'./data/{normalized_target_disease}/corpus/raw_abstracts'
+    downloaded_paper_ids_path = f'./data/{normalized_target_disease}/corpus/ids.txt'
+
+    os.makedirs(raw_abstracts_path, exist_ok=True)
 
     # Generates a query to find relevant papers about the target disease.
     # There is a grammar checking function that will ensure the query is valid.
@@ -169,7 +173,7 @@ if __name__ == '__main__':
     # From now on, everything will be tied to the target disease, being stored in a folder named after it inside the ./data folder.
 
     # Creates a list of IDs of already downloaded papers so we don't download them again.
-    old_papers = list_from_txt(DOWNLOADED_PAPERS_IDS_FILE)
+    old_papers = list_from_txt(downloaded_paper_ids_path)
     downloaded_paper_ids = set(old_papers)
 
     # Normalizes query to avoid issues with special characters.
@@ -201,7 +205,7 @@ if __name__ == '__main__':
             article_title = paper['MedlineCitation']['Article']['ArticleTitle']
             article_title_filename = article_title.lower().translate(
                 str.maketrans('', '', string.punctuation)).replace(' ', '_')
-        except KeyError as e: continue
+        except KeyError: continue
 
         # If the paper has no abstract, skips it.
         try:
@@ -222,7 +226,7 @@ if __name__ == '__main__':
         if len(filename) > 150: filename = filename[0:146]
 
         # Sets up the destination directory.
-        path_name = f'{DESTINATION_DIR}/{filename}.txt'
+        path_name = f'{raw_abstracts_path}/{filename}.txt'
         path_name = path_name.encode('ascii', 'ignore').decode('ascii')
 
         # Writes the file with the paper title and abstract.
@@ -232,7 +236,10 @@ if __name__ == '__main__':
         paper_counter += 1
 
     # Updates the list of downloaded papers with the new ones.
-    with open(DOWNLOADED_PAPERS_IDS_FILE, 'a+', encoding='utf-8') as file:
+    with open(downloaded_paper_ids_path, 'a+', encoding='utf-8') as file:
         for new_id in new_paper_id_list: file.write('\n' + str(new_id))
 
     print(f'Crawler finished with {len(old_papers) + paper_counter} papers collected.')
+
+if __name__ == '__main__':
+    main()

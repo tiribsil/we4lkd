@@ -9,7 +9,7 @@ import pandas as pd
 from google import genai
 
 from api_key import MY_API_KEY
-from target_disease import target_disease, normalized_target_disease
+from src.target_disease import *
 
 os.chdir(Path(__file__).resolve().parent.parent)
 
@@ -44,10 +44,10 @@ def extract_co_occurrence_contexts(corpus_df, target_chemical, target_disease, y
             continue
 
         # Para cada ocorrência do chemical, cria uma janela de contexto
-        for index in indices:
+        for i in indices:
             # Define o início e o fim da janela, cuidando dos limites do texto
-            start = max(0, index - window_size)
-            end = min(len(words), index + window_size + 1)
+            start = max(0, i - window_size)
+            end = min(len(words), i + window_size + 1)
 
             # Extrai a janela de palavras
             context_window = words[start:end]
@@ -118,7 +118,7 @@ def sort_by_sentences(sentences_by_compound):
     """
     return dict(sorted(sentences_by_compound.items(), key=lambda item: len(item[1]), reverse=True))
 
-def explanation_for_chemical(chemical, sentences, n_sentences=3):
+def explanation_for_chemical(target_disease, chemical, sentences, n_sentences=3):
     client = genai.Client(api_key=MY_API_KEY)
 
     prompt = f"""
@@ -135,18 +135,21 @@ def explanation_for_chemical(chemical, sentences, n_sentences=3):
 
     return response.text
 
-if __name__ == '__main__':
-    MODEL_TYPE = 'w2v' # Deve ser 'w2v' ou 'ft'
+def main():
+    target_disease = get_target_disease()
+    normalized_target_disease = get_normalized_target_disease()
+
+    model_type = 'w2v' # Deve ser 'w2v' ou 'ft'
     n_sentences = 3
     n_compounds = 10
 
-    if MODEL_TYPE not in ['w2v', 'ft']:
-        raise ValueError("MODEL_TYPE deve ser 'w2v' ou 'ft'.")
+    if model_type not in ['w2v', 'ft']:
+        raise ValueError("model_type deve ser 'w2v' ou 'ft'.")
 
-    sentences_dir_path = f'./data/{normalized_target_disease}/validation/{MODEL_TYPE}/sentences'
+    sentences_dir_path = f'./data/{normalized_target_disease}/validation/{model_type}/sentences'
     os.makedirs(sentences_dir_path, exist_ok=True)
 
-    xai_path = f'./data/{normalized_target_disease}/validation/{MODEL_TYPE}/xai'
+    xai_path = f'./data/{normalized_target_disease}/validation/{model_type}/xai'
     os.makedirs(xai_path, exist_ok=True)
 
     # Pega os nomes de todos os arquivos que vieram do crawler.
@@ -167,14 +170,7 @@ if __name__ == '__main__':
             with open(sentences_file_path, 'r', encoding='utf-8') as f:
                 sentences_by_compound = sort_by_sentences(json.load(f))
         else:
-            top_n_directory = f'./data/{normalized_target_disease}/validation/{MODEL_TYPE}/top_n_compounds/{year}'
-
-            metrics = [
-                'dot_product_result_absolute',
-                'softmax',
-                'softmax_normalization',
-                'softmax_standardization'
-            ]
+            top_n_directory = f'./data/{normalized_target_disease}/validation/{model_type}/top_n_compounds/{year}'
 
             candidate_compounds = []
             file_pattern = f'{top_n_directory}/top_*.csv'
@@ -207,8 +203,11 @@ if __name__ == '__main__':
         with open(f'{xai_path}/xai_{year}.md', 'w', encoding='utf-8') as f:
             xai_output = ''
             for compound, sentences in itertools.islice(sentences_by_compound.items(), n_compounds):
-                explanation = explanation_for_chemical(compound, sentences, n_sentences)
+                explanation = explanation_for_chemical(target_disease, compound, sentences, n_sentences)
                 xai_output += f'**Explanation for {compound}:**\n{explanation}\n\n'
                 sleep(30)
             f.write(xai_output)
             print(xai_output)
+
+if __name__ == '__main__':
+    main()

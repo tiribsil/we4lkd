@@ -17,16 +17,17 @@ from matplotlib import pyplot as plt
 from datetime import date
 from tikzplotlib import get_tikz_code
 
-from target_disease import target_disease, normalized_target_disease
+from src.target_disease import *
 
 os.chdir(Path(__file__).resolve().parent.parent)
 
-def select_top_n_chemicals_per_year(model_type, combination, metric, year, top_n=20):
+def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combination, metric, year, top_n=20):
     """
     Lê os arquivos CSV de cada composto, seleciona os 'top_n' mais relevantes
     com base no valor de uma métrica EM UM ANO ESPECÍFICO e salva essa lista em um arquivo.
 
     Args:
+        normalized_target_disease:
         model_type (str): O tipo de modelo ('w2v' ou 'ft').
         combination (str): O número da combinação do modelo (ex: '15').
         metric (str): A coluna a ser usada para o ranqueamento.
@@ -66,7 +67,7 @@ def select_top_n_chemicals_per_year(model_type, combination, metric, year, top_n
                 score = year_data[metric].iloc[0]
                 chemical_name = os.path.basename(file_path).split(f'_comb{combination}')[0]
                 scores_for_year.append((score, file_path, chemical_name))
-        except (pd.errors.EmptyDataError, FileNotFoundError, KeyError) as e:
+        except (pd.errors.EmptyDataError, FileNotFoundError, KeyError):
             # Ignora arquivos vazios, não encontrados ou sem a coluna da métrica
             continue
 
@@ -95,13 +96,14 @@ def select_top_n_chemicals_per_year(model_type, combination, metric, year, top_n
     return [file_path for _, file_path, _ in top_scores]
 
 
-def generate_historical_plots(csv_files_to_plot, column_to_plot, year_range):
+def generate_historical_plots(csv_files_to_plot, target_disease, column_to_plot, year_range):
     """
     Gera um conjunto de gráficos históricos e retorna o código Ti*k*Z correspondente.
     (Esta função não precisou de alterações, pois ela já plota a série temporal completa
     dos arquivos que recebe, o que é o comportamento desejado).
 
     Args:
+        target_disease:
         csv_files_to_plot (list): Lista de caminhos para os arquivos CSV a serem plotados.
         column_to_plot (str): O nome da coluna a ser usada para o eixo Y dos gráficos.
         year_range (tuple): O intervalo de anos (início, fim) para o eixo X.
@@ -164,7 +166,10 @@ def generate_historical_plots(csv_files_to_plot, column_to_plot, year_range):
     return latex_string
 
 
-if __name__ == '__main__':
+def main():
+    target_disease = get_target_disease()
+    normalized_target_disease = get_normalized_target_disease()
+
     pd.options.mode.chained_assignment = None
     print('Iniciando a geração do relatório de plots...')
 
@@ -209,6 +214,7 @@ if __name__ == '__main__':
         for year in range(start_year, end_year + 1):
             top_files_this_year = select_top_n_chemicals_per_year(
                 model_type='w2v',
+                normalized_target_disease=normalized_target_disease,
                 combination='15',
                 metric=metric,
                 year=year,
@@ -222,7 +228,7 @@ if __name__ == '__main__':
         print(f"\n>>> Gerando gráfico para '{metric}' com base nos melhores de {end_year}...")
         plot_key = f"plot_w2v_comb15_{metric}"
         if top_w2v_files_for_plotting:
-            plots_data[plot_key] = generate_historical_plots(top_w2v_files_for_plotting, metric, year_range)
+            plots_data[plot_key] = generate_historical_plots(top_w2v_files_for_plotting, target_disease, metric, year_range)
             print("Gráfico gerado com sucesso.")
         else:
             plots_data[plot_key] = f"\\textit{{Nenhum dado encontrado para a métrica '{metric}' no ano de {end_year}.}}"
@@ -240,6 +246,7 @@ if __name__ == '__main__':
         for year in range(start_year, end_year + 1):
             top_files_this_year = select_top_n_chemicals_per_year(
                 model_type='ft',
+                normalized_target_disease=normalized_target_disease,
                 combination='16',
                 metric=metric,
                 year=year,
@@ -253,7 +260,7 @@ if __name__ == '__main__':
         print(f"\n>>> Gerando gráfico para '{metric}' com base nos melhores de {end_year}...")
         plot_key = f"plot_ft_comb16_{metric}"
         if top_ft_files_for_plotting:
-            plots_data[plot_key] = generate_historical_plots(top_ft_files_for_plotting, metric, year_range)
+            plots_data[plot_key] = generate_historical_plots(top_ft_files_for_plotting, target_disease, metric, year_range)
             print("Gráfico gerado com sucesso.")
         else:
             plots_data[plot_key] = f"\\textit{{Nenhum dado encontrado para a métrica '{metric}' no ano de {end_year}.}}"
@@ -277,3 +284,6 @@ if __name__ == '__main__':
 
     print(f'\nRelatório salvo com sucesso em: {output_file}')
     print('END!')
+
+if __name__ == '__main__':
+    main()
