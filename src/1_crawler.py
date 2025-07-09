@@ -6,7 +6,7 @@ from pathlib import Path
 from google import genai
 
 from api_key import MY_API_KEY
-from src.target_disease import *
+from src.utils import *
 from lark import Lark, LarkError
 
 # This makes sure the script runs from the root of the project, so relative paths work correctly.
@@ -139,19 +139,16 @@ def generate_query(disease):
     client = genai.Client(api_key=MY_API_KEY)
 
     prompt = f"""
-    Generate a comprehensive and optimized PubMed search query to retrieve biomedical papers that will help a word embedding model learn meaningful relationships between {disease}, compounds, treatments, and related biological concepts.
+    Generate a comprehensive and optimized PubMed search query to retrieve as many biomedical papers as possible that will help a word embedding model learn meaningful relationships between {disease}, compounds and treatments.
         
     The query should:
     
     Include MeSH terms and common synonyms for {disease}
-    Include known drugs, treatments, and drug classes related to {disease}
-    Include relevant biological mechanisms, such as pathways, genes, proteins, and biomarkers
-    Emphasize research discussing therapeutic, pharmacological, or mechanistic contexts (e.g., treatment, inhibition, activation, clinical trials, animal models)
     Use logical operators (AND, OR) and parentheses for clarity
     
     Output ONLY the final query in a format suitable for use directly in PubMed with no additional text or information.
     """
-    response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+    response = client.models.generate_content(model='gemini-2.5-flash-lite-preview-06-17', contents=prompt)
     if not follows_grammar(response.text):
         prompt = f"""
         The following text is a PubMed query that contains syntax errors:
@@ -161,7 +158,7 @@ def generate_query(disease):
         
         Your entire response should be *only* the corrected PubMed query string. Do not include any explanations, apologies, or any text other than the corrected query itself.
         """
-        response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+        response = client.models.generate_content(model='gemini-2.5-flash-lite-preview-06-17', contents=prompt)
     if not follows_grammar(response.text):
         print('Query does not follow grammar rules. Exiting.')
         exit(1)
@@ -183,7 +180,7 @@ def canonize_disease_name(disease):
 
     Output ONLY the name of the disease, without any additional text or information, in lower case and no punctuation.
     """
-    response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+    response = client.models.generate_content(model='gemini-2.5-flash-lite-preview-06-17', contents=prompt)
 
     return response.text
 
@@ -221,6 +218,23 @@ def main():
     query = generate_query(target_disease)
     print(f'Query: {query}')
     paper_counter = 0
+
+    """
+    (Leukemia, Myeloid, Acute[MeSH] OR AML OR "Acute Myeloid Leukemia" OR "Acute Myelogenous Leukemia" OR "Myeloid Leukemia, Acute" OR "Acute Myelogenous Leukemias") AND (Compounds[MeSH] OR Drug OR Drugs OR Agent OR Agents OR Compound OR "Chemical Compound" OR "Chemical Compounds" OR Therapy OR Therapies OR Treatment OR Treatments OR "Drug Therapy" OR "Drug Therapies" OR Chemotherapy OR Chemotherapies OR "Targeted Therapy" OR "Targeted Therapies" OR Immunotherapy OR Immunotherapies OR "Biologic Therapy" OR "Biologic Therapies" OR "Small Molecule" OR "Small Molecules")
+    --> Detalhe do erro do Lark: No terminal matches ',' in the current parser context, at line 1 col 10
+    
+    (Leukemia, Myeloid, Acute[MeSH] OR AML OR "Acute 
+             ^
+    Expected one of: 
+        * _RPAREN
+        * _LPAREN
+        * _LBRACKET
+        * _ASTERISK
+        * IDENTIFIER
+        * QUOTED_STRING
+    
+    Previous tokens: Token('IDENTIFIER', 'Leukemia')
+    """
 
     # From now on, everything will be tied to the target disease, being stored in a folder named after it inside the ./data folder.
 

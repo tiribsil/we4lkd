@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
 
 # Tenta importar as funções de 'target_disease.py'
-from src.target_disease import set_target_disease, get_normalized_target_disease
+from src.utils import set_target_disease, get_normalized_target_disease
 
 # Definição das etapas do pipeline
 # Cada entrada contém: o nome do módulo, a função principal, uma descrição e o caminho do resultado.

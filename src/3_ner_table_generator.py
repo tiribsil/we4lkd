@@ -3,7 +3,7 @@ import os
 import spacy
 import pandas as pd
 from pathlib import Path
-from src.target_disease import *
+from src.utils import *
 
 os.chdir(Path(__file__).resolve().parent.parent)
 

@@ -9,7 +9,7 @@ import pandas as pd
 from google import genai
 
 from api_key import MY_API_KEY
-from src.target_disease import *
+from src.utils import *
 
 os.chdir(Path(__file__).resolve().parent.parent)
 
@@ -32,7 +32,7 @@ def extract_co_occurrence_contexts(corpus_df, target_chemical, target_disease, y
 
     # Processa cada resumo (linha) no DataFrame
     for index, line in corpus_df.dropna().iterrows():
-        if int(line['filename'][-4:]) > year: continue
+        if int(line['filename']) > year: continue
         summary = line['summary']
         words = summary.split()
 

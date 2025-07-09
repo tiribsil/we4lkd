@@ -1,11 +1,13 @@
+import re
+
 from Bio import Entrez
+
 Entrez.email = "tirs@estudante.ufscar.br"
 
-from pathlib import Path
 import pyspark.sql.functions as F
 from pyspark.sql.session import SparkSession
 from pyspark.sql.window import Window
-from src.target_disease import *
+from src.utils import *
 
 import nltk, os
 from nltk.tokenize import word_tokenize
@@ -41,7 +43,7 @@ def dataframes_from_txt(summaries_path):
             print(f"Warning: Could not extract year from filename {Path(file_path).name}. Skipping.")
             continue
 
-        NATURE_FILTERED_WORDS_IN_TITLE = [
+        nature_filtered_words_in_title = [
             'foreword', 'prelude', 'commentary', 'workshop', 'conference', 'symposium',
             'comment', 'retract', 'correction', 'erratum', 'memorial'
         ]
@@ -49,7 +51,7 @@ def dataframes_from_txt(summaries_path):
         # Filtra os artigos com título contendo pelo menos uma dessas palavras.
         title_doesnt_have_nature_filtered_words = reduce(
             lambda acc, word: acc & (F.locate(word, F.col('title')) == F.lit(0)),
-            NATURE_FILTERED_WORDS_IN_TITLE,
+            nature_filtered_words_in_title,
             F.lit(True)
         )
 
@@ -74,22 +76,6 @@ def dataframes_from_txt(summaries_path):
     return reduce(lambda df1, df2: df1.union(df2), dataframes)
 
 
-def get_csv_in_folder(file_path):
-    """Search for a .csv file in a given path. It must find just one .csv file - this constraint is tested with assert command.
-    This is an auxiliar function used during reading .csv PySpark DataFrames.
-    Args:
-        file_path: path to the folder containg the .csv file.
-    """
-
-    files = os.listdir(file_path)
-    files = filter(lambda x: x[-3:] == 'csv', files)
-    files = list(files)
-
-    assert len(files) == 1, files
-
-    return os.path.join(file_path, files[0])
-
-
 def read_table_file(file_path, sep, has_header):
     return ss()\
         .read\
@@ -101,6 +87,7 @@ def read_table_file(file_path, sep, has_header):
 def to_csv(df, target_folder, num_files=1, sep=','):
     """Saves a PySpark Dataframe into .csv file.
     Args:
+        sep: separator used in the .csv file, default is comma (',');
         df: object of the DataFrame;
         target_folder: path where the .csv is going to be saved;
         num_files: number of .csv files to be created, default is 1.
@@ -143,22 +130,6 @@ def rename_csv_in_folder(directory: str, new_filename: str):
         print(f"Ocorreu um erro inesperado: {e}")
 
 
-def get_wordnet_pos(treebank_tag):
-    """Returns WORDNET POS compliance to WORDNET lemmatization (ADJ, VERB, NOUN, ADV)"""
-
-    if treebank_tag.startswith('J'):
-            return 'a'
-    elif treebank_tag.startswith('V'):
-            return 'v'
-    elif treebank_tag.startswith('N'):
-            return 'n'
-    elif treebank_tag.startswith('R'):
-            return 'r'
-    else:
-    # As default pos in lemmatization is Noun
-        return 'n'
-
-
 def tokenize(data):
     """Tokenizes a sentence
 
@@ -169,32 +140,6 @@ def tokenize(data):
         return ['']
     else:
         return word_tokenize(data)
-
-
-def remove_last_digit(data):
-    """Removes the last character of a string a sentence
-
-        Args:
-        data: a string.
-    """
-
-    return data[:-1]
-
-
-def return_last_digit(data):
-    """Toeknizes a sentence
-
-        Args:
-        data: a sentence (string).
-    """
-
-    try:
-        aux = data[-1]
-
-    except:
-        aux = ''
-
-    return aux
 
 
 def find_mesh_terms(disease_name):
@@ -388,106 +333,127 @@ def main():
 
     print('Preprocessing text for Word2Vec models.')
 
+    # TODO poxexplode both pubchem tables. if there is a comma and NOT a space after it, then the title/synonym is a list of synonyms.
+    ## This TODO is now implemented below using a two-step regexp_replace and split.
+    unique_separator = "|||"
+
     # Creates synonym table from PubChem data (cid | synonym).
-    synonyms = read_table_file('data/pubchem_data/CID-Synonym-filtered', '\t', 'false')
-    synonyms = synonyms.withColumnRenamed("_c0", "cid")\
-                        .withColumnRenamed("_c1", "synonym")
+    print("Loading and exploding PubChem synonym table...")
+    synonyms_raw = read_table_file('data/pubchem_data/CID-Synonym-filtered', '\t', 'false') \
+        .withColumnRenamed("_c0", "cid") \
+        .withColumnRenamed("_c1", "synonym_list") \
+        .withColumn("synonym_list_separated", F.regexp_replace(F.col("synonym_list"), r",(?!\s)", unique_separator)) \
+        .withColumn("synonym", F.explode(F.split(F.col("synonym_list_separated"), unique_separator))) \
+        .withColumn("synonym", F.trim(F.col("synonym"))) \
+        .select("cid", "synonym")
 
     # Creates title table from PubChem data (cid | title). Will be used to normalize synonyms.
-    titles = read_table_file('data/pubchem_data/CID-Title', '\t', 'false')
-    titles = titles.withColumnRenamed("_c0", "cid")\
-                    .withColumnRenamed("_c1", "title")
+    print("Loading and exploding PubChem title table...")
+    titles = read_table_file('data/pubchem_data/CID-Title', '\t', 'false') \
+        .withColumnRenamed("_c0", "cid") \
+        .withColumnRenamed("_c1", "title_list") \
+        .withColumn("title_list_separated", F.regexp_replace(F.col("title_list"), r",(?!\s)", unique_separator)) \
+        .withColumn("title", F.explode(F.split(F.col("title_list_separated"), unique_separator))) \
+        .withColumn("title", F.trim(F.col("title"))) \
+        .select("cid", "title")
 
     # Reads the NER table.
     ner_df = read_table_file(f'./data/{normalized_target_disease}/corpus/ner_table.csv', ',', 'true')
     if not ner_df:
         print('NER table not found. Have you run step 3?')
         return
-
     print('NER table:')
     ner_df.show(truncate=False)
 
-    # Joins the synonyms with their titles. Now we have a table with (synonym | synonym_title).
-    synonyms = synonyms\
-            .withColumn('synonym', F.regexp_replace(F.lower(F.col('synonym')), r'\s+', ''))\
-            .groupby('synonym')\
-            .agg(F.min('cid').alias('cid'))\
-            .join(titles, 'cid')\
-            .withColumn('synonym_title', F.regexp_replace(F.lower(F.col('title')), r'\s+', ''))\
-            .select('synonym', 'synonym_title')
+    ## Joins the synonyms with their titles. Now we have a master map with
+    ## (raw_synonym | normalized_synonym | canonical_title).
+    normalized_synonyms = synonyms_raw \
+        .withColumn('norm_synonym', F.regexp_replace(F.lower(F.col('synonym')), r'\s+', ''))
+
+    normalized_titles = titles \
+        .withColumn('norm_title', F.regexp_replace(F.lower(F.col('title')), r'\s+', ''))
+
+    synonym_to_title_map = normalized_synonyms \
+        .groupby('norm_synonym') \
+        .agg(F.min('cid').alias('cid')) \
+        .join(normalized_titles, 'cid') \
+        .select(
+        F.col('norm_synonym'),
+        F.col('norm_title').alias('synonym_title'),
+        F.col('norm_synonym').alias('raw_synonym')
+    )
 
     # Removes synonyms that are the same as their titles.
     # Joins the synonyms with the NER table to filter out words that don't show up in the corpus.
     # This is done as a performance optimization, the PubChem tables are huge.
-    synonyms = synonyms\
-                .where(F.col('synonym') != F.col('synonym_title'))\
-                .join(ner_df, F.col('synonym') == F.col('token'), 'inner')\
-                .drop(*('token', 'entity'))
+    filtered_map = synonym_to_title_map \
+        .where(F.col('norm_synonym') != F.col('synonym_title')) \
+        .join(ner_df, F.col('norm_synonym') == F.regexp_replace(F.lower(F.col('token')), r'\s+', ''), 'inner') \
+        .drop('token', 'entity')
+
+    ## Prepare for multi-word replacement by collecting only multi-word compounds to the driver.
+    print("Building compound replacement map...")
+    compound_map_df = filtered_map \
+        .where(F.col('raw_synonym').contains(' ')) \
+        .select('raw_synonym', 'synonym_title') \
+        .distinct()
+
+    compound_map_list = compound_map_df.collect()
+    compound_map_list.sort(key=lambda x: len(x['raw_synonym']), reverse=True)
 
     # Loads the aggregated abstracts from the corpus, creates an (id | filename | summary) table.
     cleaned_documents = dataframes_from_txt(aggregated_abstracts_path)
     print('Before any preprocessing:')
     cleaned_documents.show(truncate=False)
 
+    ## Chain all multi-word compound replacements on the full text *before* splitting.
+    summary_with_compounds_joined = reduce(
+        lambda col, row: F.regexp_replace(col, r'(?i)\b' + re.escape(row['raw_synonym']) + r'\b', row['synonym_title']),
+        compound_map_list,
+        cleaned_documents['summary']
+    )
+
     # Preprocesses each line and separates each word into a different line in the table.
     # This preprocessing step is basically the removal of special characters and strings, along with synonym normalization.
-    cleaned_documents = cleaned_documents\
-                        .withColumn('summary', summary_column_preprocessing(F.col('summary'), target_disease))\
-                        .select('id', 'filename', F.posexplode(F.split(F.col('summary'), ' ')).alias('pos', 'word'))
+    cleaned_documents = cleaned_documents \
+        .withColumn('summary', summary_column_preprocessing(summary_with_compounds_joined, target_disease)) \
+        .select('id', 'filename', F.posexplode(F.split(F.col('summary'), ' ')).alias('pos', 'word'))
 
-    print('After summary_column_preprocessing:')
+    print('After summary_column_preprocessing and compound joining:')
     cleaned_documents.show(truncate=False)
 
     # Preprocesses again, this time removing stopwords and normalizing the words.
     # Reverts the posexplode so that each abstract is in a single line again.
-    cleaned_documents = words_preprocessing(cleaned_documents)\
-                        .withColumn('summary', F.collect_list('word').over(w2))\
-                        .groupby('id', 'filename')\
-                        .agg(
-                            F.concat_ws(' ', F.max(F.col('summary'))).alias('summary')
-                        )
+    cleaned_documents = words_preprocessing(cleaned_documents) \
+        .withColumn('summary', F.collect_list('word').over(w2)) \
+        .groupby('id', 'filename') \
+        .agg(F.concat_ws(' ', F.max(F.col('summary'))).alias('summary'))
 
     print('After words_preprocessing:')
     cleaned_documents.show(truncate=False)
 
     # Separates the words again.
-    df = cleaned_documents\
-        .select(
-            'id',
-            'filename',
-            F.posexplode(F.split(F.col('summary'), ' ')).alias('pos', 'word')
-        )
-
-    df = df\
+    df = cleaned_documents \
+        .select('id', 'filename', F.posexplode(F.split(F.col('summary'), ' ')).alias('pos', 'word')) \
         .withColumnRenamed('word', 'word_n')
 
-    df.show(n=60, truncate=False)
-
+    ## This section now handles the remaining single-word synonyms.
+    single_word_synonyms = filtered_map \
+        .where(~F.col('raw_synonym').contains(' ')) \
+        .select(F.col('norm_synonym'), F.col('synonym_title'))
 
     # Joins the word table with the synonyms table.
     # If the word is a synonym, there will be something in the title column. Otherwise, it will be null.
-    df = df\
-        .join(synonyms, F.col('synonym') == F.lower(F.col('word_n')), 'left')\
-        .distinct()
-
-    df.show(truncate=False)
+    df = df.join(single_word_synonyms, F.col('norm_synonym') == F.lower(F.col('word_n')), 'left')
 
     # Swaps synonyms for their titles.
-    matched_synonyms = df\
-        .where(F.col('synonym_title').isNotNull())\
-        .select(F.col('synonym'), F.col('synonym_title'))\
-        .distinct()\
-        .where(F.col('synonym') != F.col('synonym_title'))
-
     # Aggregates the words to form the whole abstracts again, but now they're preprocessed.
-    df = df\
-        .withColumn('word', F.coalesce(F.col('synonym_title'), F.col('word_n')))\
-        .drop(*('synonym', 'synonym_title', 'word_n'))\
-        .withColumn('summary', F.collect_list('word').over(w2))\
-        .groupby('id', 'filename')\
-        .agg(
-            F.concat_ws(' ', F.max(F.col('summary'))).alias('summary')
-        )
+    df = df \
+        .withColumn('word', F.coalesce(F.col('synonym_title'), F.col('word_n'))) \
+        .drop('norm_synonym', 'synonym_title', 'word_n') \
+        .withColumn('summary', F.collect_list('word').over(w2)) \
+        .groupby('id', 'filename') \
+        .agg(F.concat_ws(' ', F.max(F.col('summary'))).alias('summary'))
 
     print('Final DataFrame:')
     df = df.withColumn('id', F.monotonically_increasing_id())

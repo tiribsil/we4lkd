@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from src.target_disease import *
+from src.utils import *
 
 def main():
     normalized_target_disease = get_normalized_target_disease()
