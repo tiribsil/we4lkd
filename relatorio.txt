@@ -1,0 +1,64 @@
+Primeiro, juntei todos os pedaços do projeto do Matheus no notebook lma.ipynb.
+
+Nesse processo, tirei dúvidas com o próprio Matheus e consegui entender todo o código.
+Depois, parti para a adaptação do algoritmo para o meu problema.
+
+A primeira coisa que percebi que tinha que mudar eram os termos de busca.
+
+No código do Matheus, os termos de busca tinham sido escolhidos manualmente por um especialista, e eles incluíam sinônimos para a LMA e seus tratamentos conhecidos.
+
+Como no meu caso a doença é dinâmica, os tratamentos devem ser buscados em tempo real de forma automática. Minhas primeiras ideias foram encontrar um site que tivesse os tratamentos conhecidos para a doença ou usar uma LLM para encontrar esses compostos.
+
+Minha primeira ideia foi usar o PubChem para buscar os tratamentos conhecidos para a doença, mas percebi que o PubChem não tinha informações sobre os tratamentos conhecidos para a doença.
+
+Tentei também buscar no PubMed, mas não consegui encontrar os tratamentos conhecidos para a doença.
+
+Depois, tentei usar o DrugBank, mas me responderam que não atendiam ao Brasil.
+
+Então, encontrei o site Medscape, que contém tratamentos para doenças.
+
+Depois de muita luta, consegui obter os resultados de uma busca no Medscape, agora tenho que tentar extrair os compostos dessas páginas.
+
+Acho que vou usar uma LLM mesmo pra extrair os compostos da página
+
+Tentei usar PubMedBERT pra extrair os compostos do Medscape, mas não é muito bom e o Medscape não tem tantas páginas de protocolo de tratamento, vou tentar usar só LLM.
+
+Usei Gemini pra fazer a query e deu certo parece, se der problema eu descubro depois.
+
+Baixar abstracts foi bem.
+
+Agregação dos arquivos foi bem.
+
+Voltei no crawler para conferir a sintaxe da query.
+
+Para o pré-processamento, comecei procurando por uma forma de normalizar os sinônimos da doença, trocando por um nome canônico.
+
+Tive vários problemas com achar os sinônimos da doença, mas acabei conseguindo usar Entrez, só preciso do nome da doença bem certinho.
+
+Agora preciso conseguir as tabelas de sinônimos e nomes canônicos de compostos.
+
+Peguei as tabelas do PubChem. Vou alterar o código para ler TSV em vez de CSV, já que o PubChem fornece os dados em TSV.
+
+Achei melhor trocar a tabela NER pronta por uma feita com base nos abstracts baixados.
+
+Treinamento dos modelos funcionou bem.
+
+Para Data Augmentation, vou tentar usar modelos de linguagem sequenciais com base nas embeddings e em compostos candidatos.
+
+Então tenho que começar a analise antes pra conseguir os compostos candidatos.
+
+A análise consistiu em tirar tudo que dependia dos tratamentos conhecidos. Agora, é usado o NER para calcular a relação de cada composto mencionado no corpus com a doença alvo ao decorrer dos anos.
+
+Agora, para a XAI, vou pegar janelas de contexto que contém cada composto selecionado e a doença alvo, depois vou mostrar essas frases para um transformer e pedir para ele explicar a relação entre o composto e a doença.
+
+XAI aparentemente foi muito bem. Agora preciso fazer uma saída para cada ano e comparar com as saídas com data augmentation.
+
+Na verdade, antes disso estou tentando tirar o ruído que vem do generate_dotproducts. Trocando NER por tabela Titles da PubChem.
+
+Filtragem de ruído foi bem, mas vou atrasar o data augmentation mais um pouco e fazer um programa principal.
+
+Fiz o programa principal, mas os resultados não estão bons (recomendações depois das descobertas), pois os compostos só começam a ser mencionados depois do tratamento ser consolidado. Preciso rodar a pipeline duas vezes, uma pra pegar os compostos tratamento e outra adicionando esses compostos nas palavras a serem procuradas pelo crawler.
+
+Fiz um script para ranquear as recomendações com base no número de notificações e há quanto tempo foi mencionada pela primeira vez. vou tentar usar isso para filtrar os compostos que não são relevantes.
+
+

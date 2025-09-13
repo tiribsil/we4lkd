@@ -9,10 +9,24 @@ from src.utils import *
 
 os.chdir(Path(__file__).resolve().parent.parent)
 
+
 def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combination, metric, year, top_n=20):
+    """
+    Goes through the compounds' history and selects the top N compounds for a given year using a given metric.
+    Args:
+        model_type: Either 'w2v' or 'ft'.
+        normalized_target_disease: The target disease normalized the same way as its data folder.
+        combination: The parameter combination used to train the model.
+        metric: One of the metrics in the compounds' history.
+        year: The specific year to analyze the compounds' history.
+        top_n: How many of the best compounds to select.
+
+    Returns:
+        list: A list of file paths for the top N compounds' history for the given year.
+    """
     validation_folder = f'./data/{normalized_target_disease}/validation/{model_type}/compound_history/'
 
-    # Gets all compound history
+    # Gets all compound history files.
     try:
         csv_files = [
             os.path.join(validation_folder, f)
@@ -24,75 +38,63 @@ def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combi
     except FileNotFoundError:
         return []
 
-    # 3. Lê cada arquivo, encontra o score para o ano específico e coleta os nomes
+    # Gets all (score, file_path, chemical_name) tuples for the given year.
     scores_for_year = []
     for file_path in csv_files:
         try:
             df = pd.read_csv(file_path)
-            # Filtra o DataFrame para encontrar a linha correspondente ao ano
             year_data = df[df['year'] == year]
 
-            if not year_data.empty:
-                # Extrai o score da métrica para aquele ano
-                score = year_data[metric].iloc[0]
-                chemical_name = os.path.basename(file_path).split(f'_comb{combination}')[0]
-                scores_for_year.append((score, file_path, chemical_name))
+            if year_data.empty: continue
+
+            score = year_data[metric].iloc[0]
+            chemical_name = os.path.basename(file_path).split(f'_comb{combination}')[0]
+            scores_for_year.append((score, file_path, chemical_name))
         except (pd.errors.EmptyDataError, FileNotFoundError, KeyError):
-            # Ignora arquivos vazios, não encontrados ou sem a coluna da métrica
             continue
 
-    # 4. Ordena a lista de scores em ordem decrescente
+    # Sorts the scores in descending order by the specified metric.
     scores_for_year.sort(key=lambda x: x[0], reverse=True)
 
-    # 5. Seleciona os 'top_n' melhores
+    # Selects the top N scores for the year.
     top_scores = scores_for_year[:top_n]
 
-    # Imprime os top N selecionados para o ano atual
-    print(f'--- Top {len(top_scores)} compostos para o ano {year} (Métrica: {metric}) ---')
-    for score, _, name in top_scores:
-        print(f'  {name}: {score:.4f}')
-
-    # 6. Salva os nomes dos compostos selecionados em um CSV específico para o ano
+    # Saves the list as a CSV file in the corresponding year folder.
     output_dir = f'./data/{normalized_target_disease}/validation/{model_type}/top_n_compounds/{year}/'
-    os.makedirs(output_dir, exist_ok=True)  # Garante que o diretório do ano exista
+    os.makedirs(output_dir, exist_ok=True)
     output_filename = os.path.join(output_dir, f'top_{top_n}_{metric}.csv')
 
     top_chemicals_names = [name for _, _, name in top_scores]
     top_df = pd.DataFrame({'chemical_name': top_chemicals_names})
     top_df.to_csv(output_filename, index=False)
-    print(f'-> Lista salva em: {output_filename}')
 
-    # 7. Retorna os caminhos dos arquivos dos top N para uso posterior (plotagem)
     return [file_path for _, file_path, _ in top_scores]
 
 
 def generate_historical_plots(csv_files_to_plot, target_disease, column_to_plot, year_range):
     """
-    Gera um conjunto de gráficos históricos e retorna o código Ti*k*Z correspondente.
-    (Esta função não precisou de alterações, pois ela já plota a série temporal completa
-    dos arquivos que recebe, o que é o comportamento desejado).
+    Generates a set of historical plots and returns the corresponding TikZ code. (This function did not need changes, as it already plots the complete time series of the files it receives, which is the desired behavior).
 
     Args:
-        target_disease:
-        csv_files_to_plot (list): Lista de caminhos para os arquivos CSV a serem plotados.
-        column_to_plot (str): O nome da coluna a ser usada para o eixo Y dos gráficos.
-        year_range (tuple): O intervalo de anos (início, fim) para o eixo X.
+        target_disease: The target disease for which the plots are generated.
+        csv_files_to_plot: List of paths to the CSV files to be plotted.
+        column_to_plot: The name of the column to be used for the Y axis of the plots.
+        year_range: The range of years (start, end) for the X axis.
 
     Returns:
-        str: Uma string contendo o código Ti*k*Z para os gráficos.
+        str: A string containing the TikZ code for the plots.
     """
     all_plots_data = []
     for file_path in csv_files_to_plot:
-        try:
-            df = pd.read_csv(file_path)
-            if not df.empty:
-                chemical_name = os.path.basename(file_path).split('_comb')[0].replace('_', ' ')
-                all_plots_data.append({'name': chemical_name, 'data': df})
-        except (pd.errors.EmptyDataError, FileNotFoundError) as e:
-            print(f'Aviso ao plotar: Não foi possível ler ou o arquivo está vazio: {file_path}. Erro: {e}')
+        df = pd.read_csv(file_path)
+
+        if df.empty: continue
+
+        chemical_name = os.path.basename(file_path).split('_comb')[0].replace('_', ' ')
+        all_plots_data.append({'name': chemical_name, 'data': df})
 
     if not all_plots_data:
-        print('Nenhum dado válido para plotar. Retornando string vazia.')
+        print('No data to plot.')
         return ''
 
     num_plots = len(all_plots_data)
@@ -116,9 +118,9 @@ def generate_historical_plots(csv_files_to_plot, target_disease, column_to_plot,
         axs[i].set_axis_off()
 
     fig.tight_layout(pad=3.0)
-    fig.supxlabel('Ano de Publicação', y=0.01, fontsize=24)
+    fig.supxlabel('Year published', y=0.01, fontsize=24)
     y_label = ' '.join(column_to_plot.split('_')).capitalize()
-    fig.supylabel(f'Relação com {target_disease.capitalize()}: {y_label}', x=0.01, fontsize=24)
+    fig.supylabel(f'Relationship with {target_disease.capitalize()}: {y_label}', x=0.01, fontsize=24)
 
     plt.close(fig)
 
@@ -153,9 +155,11 @@ def main():
     start_year, end_year = get_corpus_year_range(normalized_target_disease)
     year_range = (start_year, end_year)
 
+    # Computes the top N compounds for each year and generates plots for Word2Vec.
     for metric in metrics_to_plot:
         top_w2v_files_for_plotting = []
 
+        # Selects and saves the top N compounds for each year using the metric. Saves the last list for plotting.
         print(f'Getting compounds with the best {metric} in each year...')
         for year in range(start_year, end_year + 1):
             top_files_this_year = select_top_n_chemicals_per_year(
@@ -178,7 +182,7 @@ def main():
             plots_data[plot_key] = f'\\textit{{{metric} values not found until {end_year}.}}'
             print('No data to plot.')
 
-
+    # Same thing for FastText.
     for metric in metrics_to_plot:
         top_ft_files_for_plotting = []
 
@@ -228,6 +232,7 @@ def main():
         f.write(report_latex)
 
     print('End :)')
+
 
 if __name__ == '__main__':
     main()

@@ -46,42 +46,103 @@ def get_embedding_of_word(word, model, method):
         return np.mean(output_embeddings, axis=0)
 
 
-def get_compounds(normalized_target_disease):
-    pubchem_path = 'data/pubchem_data/CID-Title'
-    clean_abstracts_path = f'./data/{normalized_target_disease}/corpus/clean_abstracts/clean_abstracts.csv'
+import pandas as pd
+from chembl_webresource_client.new_client import new_client
 
-    pubchem_titles = pd.read_csv(
-        pubchem_path,
-        sep='\t',
-        header=None,
-        usecols=[1],
-        names=['Title']
-    )
-    pubchem_normalized_set = set(
-        pubchem_titles['Title'].str.lower().str.replace(r'\s+', '', regex=True).dropna()
-    )
-
+def load_drugs_from_chembl_refined():
+    """
+    Versão refinada que busca APENAS 'Small molecules' no ChEMBL.
+    """
+    print("Buscando lista de 'Small molecule drugs' do ChEMBL (busca refinada)...")
+    drug_names_set = set()
     try:
-        clean_df = pd.read_csv(clean_abstracts_path)
-    except FileNotFoundError:
-        return []
+        molecule = new_client.molecule
+        
+        # --- MUDANÇA 1: Adicionado filtro 'molecule_type' para aumentar a especificidade ---
+        # Isso remove elementos, anticorpos, peptídeos grandes, etc., focando em drogas clássicas.
+        approved_drugs_query = molecule.filter(
+            max_phase__in=[2, 3, 4], 
+            molecule_type='Small molecule' 
+        ).only(['pref_name', 'synonyms'])
 
-    word_counts = clean_df['summary'].str.split(expand=True).stack().value_counts()
+        for i, drug in enumerate(approved_drugs_query):
+            if drug['pref_name']:
+                drug_names_set.add(drug['pref_name'].lower().replace(' ', ''))
+            for synonym in drug.get('synonyms', []):
+                if synonym:
+                    drug_names_set.add(synonym.lower().replace(' ', ''))
+            if (i + 1) % 5000 == 0:
+                print(f"Processados {i+1} registros de 'Small molecules' do ChEMBL...")
 
-    frequent_words = word_counts[word_counts >= 5]
-    corpus_words_set = set(frequent_words.index)
-    print(f"Found {len(corpus_words_set)} unique words with frequency >= 5 in the corpus.")
+        print(f"Carregados {len(drug_names_set)} nomes/sinônimos de 'Small molecules' do ChEMBL.")
+        return drug_names_set
+    except Exception as e:
+        print(f"Ocorreu um erro ao conectar com a API do ChEMBL: {e}")
+        return set()
 
-    validated_normalized_compounds = list(pubchem_normalized_set & corpus_words_set)
+def get_therapeutic_compounds(normalized_target_disease):
+    """
+    Cria uma whitelist de compostos terapêuticos com filtros aprimorados para remover
+    ruído biológico e focar em tratamentos específicos.
+    """
+    pubchem_syn_path = "./data/pubchem_data/CID-Synonym-filtered"
+    pubchem_title_path = "./data/pubchem_data/CID-Title"
 
-    print(f"Total validated compounds: {len(validated_normalized_compounds)}")
 
-    with open(f'./data/{normalized_target_disease}/corpus/compounds_in_corpus.txt', 'w', encoding='utf-8') as f:
-        for compound in sorted(validated_normalized_compounds):
-            f.write(f"{compound}\n")
+    # Usa a nova função de busca refinada
+    chembl_drug_names = load_drugs_from_chembl_refined()
+    if not chembl_drug_names:
+        print("Não foi possível obter a lista de medicamentos do ChEMBL. Abortando.")
+        return set()
 
-    return validated_normalized_compounds
+    # O carregamento e merge com Pandas continua o mesmo
+    print("Carregando arquivos da PubChem com Pandas...")
+    try:
+        synonyms_df = pd.read_csv(pubchem_syn_path, sep='\t', header=None, names=['cid', 'synonym'], dtype={'cid': str})
+        titles_df = pd.read_csv(pubchem_title_path, sep='\t', header=None, names=['cid', 'title'], dtype={'cid': str})
+    except FileNotFoundError as e:
+        print(f"Erro: Arquivo não encontrado - {e}. Verifique os caminhos.")
+        return set()
 
+    print("Mapeando nomes do ChEMBL para CIDs da PubChem...")
+    chembl_df = pd.DataFrame(list(chembl_drug_names), columns=['chembl_term_normalized'])
+    synonyms_df['synonym_normalized'] = synonyms_df['synonym'].str.lower().str.replace(r'\s+', '', regex=True)
+    synonyms_df.dropna(subset=['synonym_normalized', 'cid'], inplace=True)
+    matched_cids_df = pd.merge(chembl_df, synonyms_df, left_on='chembl_term_normalized', right_on='synonym_normalized', how='inner')
+    unique_matched_cids = matched_cids_df['cid'].unique()
+    print(f"Encontrados {len(unique_matched_cids)} CIDs únicos correspondentes a compostos terapêuticos.")
+
+    print("Buscando títulos canônicos para os CIDs encontrados...")
+    therapeutic_titles_df = titles_df[titles_df['cid'].isin(unique_matched_cids)]
+    normalized_titles = therapeutic_titles_df['title'].str.lower().str.replace(r'\s+', '', regex=True)
+    final_whitelist_set = set(normalized_titles.dropna().unique())
+    print(f"Whitelist (antes da exclusão) criada com {len(final_whitelist_set)} nomes canônicos.")
+
+    # --- MUDANÇA 2: Aplicar uma blacklist para remover ruído biológico comum ---
+    # Esta lista contém moléculas que, embora tecnicamente possam ser "drogas",
+    # são onipresentes em textos biológicos e não representam o tratamento principal.
+    BIOMOLECULE_BLACKLIST = {
+        # Nucleosídeos e bases
+        'thymidine', 'deoxycytidine', 'uridine', 'cytidine', 'adenosine', 'guanine', 'cytosine', 'thymine',
+        # Aminoácidos comuns
+        'aminoacids', 'glutathione', 'arginine', 'lysine', 'valine', 'citrulline', 'leucine', 'isoleucine',
+        # Metabólitos e vitaminas
+        'cholesterol', 'histamine', 'folicacid', 'cholecalciferol', 'retinoicacid', 'nicotinicacid', 'alpha-tocopherol',
+        # Íons e elementos simples (a busca no ChEMBL já deve remover a maioria)
+        'lithium', 'magnesium', 'oxygen', 'nitrogen', 'platinum', 'hydrogenperoxide',
+        # Reagentes de laboratório e excipientes
+        'agar', 'hemin', 'phorbol12-myristate13-acetate', 'methylcellulose(4000cps)',
+        # Outros
+        'insulin'
+    }
+
+    # Filtra a whitelist final removendo os itens da blacklist
+    filtered_whitelist = final_whitelist_set - BIOMOLECULE_BLACKLIST
+    
+    print(f"Removidos {len(final_whitelist_set) - len(filtered_whitelist)} compostos genéricos da whitelist.")
+    print(f"Whitelist final e filtrada contém {len(filtered_whitelist)} compostos.")
+    
+    return filtered_whitelist
 
 def main():
     normalized_target_disease = get_normalized_target_disease()
@@ -106,9 +167,16 @@ def main():
             all_compounds_in_corpus = [line.strip() for line in f if line.strip()]
     else:
         print('Gathering all compounds mentioned in the corpus.')
-        all_compounds_in_corpus = get_compounds(normalized_target_disease)
+        all_compounds_in_corpus = get_therapeutic_compounds(normalized_target_disease)
+        if all_compounds_in_corpus:
+            print(f'Saving list of {len(all_compounds_in_corpus)} compounds to {compound_list_path}')
+            os.makedirs(os.path.dirname(compound_list_path), exist_ok=True)
+            with open(compound_list_path, 'w', encoding='utf-8') as f:
+                for compound in sorted(list(all_compounds_in_corpus)):
+                    f.write(f"{compound}\n")
+
     if not all_compounds_in_corpus:
-        print(f"Clean abstracts file not found. Have you run step 4?")
+        print(f"Could not load or generate compound list. Have you run step 4?")
         return
 
     # Loads each of the year range trained models.
@@ -154,6 +222,9 @@ def main():
 
         # Gets the word embedding of the target disease.
         target_disease_embedding = get_embedding_of_word(normalized_target_disease, model, method='da')
+        if target_disease_embedding is None:
+            print(f"CRITICAL: Target disease '{normalized_target_disease}' not found in the model's vocabulary.")
+            continue
 
         # Tries to get the embedding of each compound.
         for compound in all_compounds_in_corpus:
@@ -178,6 +249,7 @@ def main():
     for c in all_compounds_in_corpus:
         key = f'{c}_comb{combination}'
         key_filename = re.sub(r'[\\/*?:"<>|]', '_', key)
+        key_filename = key_filename[:50]
 
         # Gets the dot products for the current compound. Will be used for further calculations.
         dot_products = dictionary_for_all_compounds[key]['dot_product']
@@ -185,7 +257,7 @@ def main():
         # Skips the compound if it was never iterated upon (i.e., no dot products were computed).
         # This SHOULD NOT happen, as the compounds were validated against the corpus. TODO
         if not dot_products:
-            print(f"Aviso: Lista de dados para '{key}' está vazia. Pulando cálculos.")
+            # print(f"Aviso: Lista de dados para '{key}' está vazia. Pulando cálculos.")
             continue
 
         # Gets the normalized dot products and stores them in the dictionary.
@@ -207,7 +279,6 @@ def main():
             dictionary_for_all_compounds[key]['delta_normalized_dot_product'] = []
 
         # Writes the compound entry in the dictionary to a CSV file.
-        print(f'Writing file for {key}')
         pd.DataFrame.from_dict(data=dictionary_for_all_compounds[key]).to_csv(
             f'{compound_history_path}/{key_filename}.csv',
             columns=['year', 'normalized_dot_product', 'delta_normalized_dot_product', 'euclidian_distance'],

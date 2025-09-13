@@ -12,3 +12,5 @@ safetensors
 transformers
 numpy
 google-genai
+matplotlib==3.7.5
+webcolors==1.13
