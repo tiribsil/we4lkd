@@ -61,4 +61,54 @@ Fiz o programa principal, mas os resultados não estão bons (recomendações de
 
 Fiz um script para ranquear as recomendações com base no número de notificações e há quanto tempo foi mencionada pela primeira vez. vou tentar usar isso para filtrar os compostos que não são relevantes.
 
+Nova ideia: Implementar um "Fator de Especificidade Terapêutica" (O mais poderoso)
 
+# A Lógica: Drogas de suporte (antibióticos, antifúngicos, anti-hipertensivos) são mencionadas 
+# na literatura de uma vasta gama de doenças. Em contraste, um tratamento direto é, em geral, 
+# discutido em um conjunto muito mais restrito de doenças. Amphotericin B aparece em artigos 
+# sobre câncer, transplantes, HIV, etc. Midostaurin aparece quase que exclusivamente em artigos # sobre LMA e mastocitose sistêmica.
+
+# Podemos quantificar essa especificidade. A ideia é análoga ao TF-IDF em processamento de 
+# texto: uma palavra que aparece em todos os documentos (uma "stopword") é menos importante. Uma 
+# droga que aparece em todos os "corpus de doenças" é, provavelmente, uma terapia de suporte.
+
+# Como Implementar:
+
+# Isto requer um pré-processamento único, mas o resultado é um "super-filtro" que beneficiará 
+# todas as suas análises futuras.
+
+#     Crie Corpos para Múltiplas Doenças: Execute sua pipeline de coleta de abstracts para um 
+# conjunto diversificado de ~20-30 doenças (ex: Diabetes Tipo 2, Artrite Reumatoide, Alzheimer, 
+# Asma, Hipertensão, Depressão, além das de câncer).
+
+#     Gere a Lista de Compostos por Doença: Para cada doença, gere a lista final de compostos 
+# encontrados em seu corpus (assim como você já faz).
+
+#     Calcule o "Document Frequency" da Droga: Crie um mapa global de contagem. Para cada 
+# composto no seu "universo PubChem", conte em quantos corpos de doenças diferentes ele apareceu.
+
+#         amphotericinb: aparece em 18 de 20 doenças.
+
+#         verapamil: aparece em 15 de 20 doenças.
+
+#         azacitidine: aparece em 2 de 20 doenças.
+
+#     Calcule o Fator de Especificidade (TSF - Therapeutic Specificity Factor):
+
+#         N = Número total de doenças no seu universo (ex: 20)
+
+#         d_c = Número de doenças em que o composto c aparece.
+
+#         TSF(c) = log(N / d_c)
+
+#         Este fator será alto para drogas específicas e muito baixo (próximo de zero) para drogas genéricas/de suporte.
+
+#     Integre ao seu Score Final:
+
+#         New_Score = Original_Score * TSF
+
+#         Drogas como amphotericinb e verapamil terão seus scores drasticamente reduzidos, 
+# enquanto azacitidine e midostaurin manterão ou aumentarão seu valor relativo.
+
+# Vantagens: Abordagem baseada em dados, completamente agnóstica à doença, e a forma mais 
+# robusta de resolver o problema de "suporte vs. direto".
