@@ -208,28 +208,28 @@ def main():
             plots_data[plot_key] = f'\\textit{{{metric} values not found until {end_year}.}}'
             print('No data to plot.')
 
-    latex_jinja_env = jinja2.Environment(
-        block_start_string='\BLOCK{', block_end_string='}',
-        variable_start_string='\VAR{', variable_end_string='}',
-        comment_start_string='\#{', comment_end_string='}',
-        line_statement_prefix='%%', line_comment_prefix='%#',
-        trim_blocks=True, autoescape=False,
-        loader=jinja2.FileSystemLoader(os.path.abspath('.'))
-    )
-    template = latex_jinja_env.get_template('./data/latent_knowledge_template.tex')
-
-    print('Generating LaTeX report file...')
-    report_latex = template.render(
-        target_disease_name=target_disease.replace('_', ' ').title(),
-        **plots_data
-    )
-
-    dat = date.today().strftime('%d_%m_%Y')
-    output_file = f'./data/{normalized_target_disease}/reports/latent_knowledge_report_{dat}.tex'
-
-    Path(f'./data/{normalized_target_disease}/reports/').mkdir(parents=True, exist_ok=True)
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(report_latex)
+    # latex_jinja_env = jinja2.Environment(
+    #     block_start_string='\BLOCK{', block_end_string='}',
+    #     variable_start_string='\VAR{', variable_end_string='}',
+    #     comment_start_string='\#{', comment_end_string='}',
+    #     line_statement_prefix='%%', line_comment_prefix='%#',
+    #     trim_blocks=True, autoescape=False,
+    #     loader=jinja2.FileSystemLoader(os.path.abspath('.'))
+    # )
+    # template = latex_jinja_env.get_template('./data/latent_knowledge_template.tex')
+    #
+    # print('Generating LaTeX report file...')
+    # report_latex = template.render(
+    #     target_disease_name=target_disease.replace('_', ' ').title(),
+    #     **plots_data
+    # )
+    #
+    # dat = date.today().strftime('%d_%m_%Y')
+    # output_file = f'./data/{normalized_target_disease}/reports/latent_knowledge_report_{dat}.tex'
+    #
+    # Path(f'./data/{normalized_target_disease}/reports/').mkdir(parents=True, exist_ok=True)
+    # with open(output_file, 'w', encoding='utf-8') as f:
+    #     f.write(report_latex)
 
     print('End :)')
 

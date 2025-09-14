@@ -129,11 +129,11 @@ def get_therapeutic_compounds(normalized_target_disease):
         # Metabólitos e vitaminas
         'cholesterol', 'histamine', 'folicacid', 'cholecalciferol', 'retinoicacid', 'nicotinicacid', 'alpha-tocopherol',
         # Íons e elementos simples (a busca no ChEMBL já deve remover a maioria)
-        'lithium', 'magnesium', 'oxygen', 'nitrogen', 'platinum', 'hydrogenperoxide',
+        'lithium', 'magnesium', 'oxygen', 'nitrogen', 'platinum', 'hydrogenperoxide', 'radium', 'potassium',
         # Reagentes de laboratório e excipientes
         'agar', 'hemin', 'phorbol12-myristate13-acetate', 'methylcellulose(4000cps)',
         # Outros
-        'insulin'
+        'insulin', 'triphosphate', 'histaminedihydrochloride'
     }
 
     # Filtra a whitelist final removendo os itens da blacklist

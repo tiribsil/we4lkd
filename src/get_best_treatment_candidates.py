@@ -4,7 +4,7 @@ from pathlib import Path
 
 from utils import *
 
-TOP_N = 20
+TOP_N = 30
 HEADER_NAME = 'chemical_name'
 
 os.chdir(Path(__file__).resolve().parent.parent)
@@ -84,7 +84,19 @@ def main():
 
     scored_results.sort(key=lambda x: x['score'], reverse=True)
 
-    print(f"{'Score':<12} {'Compound'}")
+    # --- Gemini Edit Start ---
+    # Save the top N chemical names to a file
+    output_dir = Path(f'./data/{normalized_target_disease}')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / 'potential_treatments.txt'
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for result in scored_results[:TOP_N]:
+            f.write(result['name'] + '\n')
+    print(f"\nTop {TOP_N} potential treatments saved to {output_path}")
+    # --- Gemini Edit End ---
+
+    print(f"\n{'Score':<12} {'Compound'}")
     print("-" * 60)
     for result in scored_results[:TOP_N]:
         print(

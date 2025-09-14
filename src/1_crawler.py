@@ -1,13 +1,9 @@
 import os
-from time import sleep
 
 from Bio import Entrez
 from pathlib import Path
-from google import genai
 
-from api_key import MY_API_KEY
 from src.utils import *
-from lark import Lark, LarkError
 
 # This makes sure the script runs from the root of the project, so relative paths work correctly.
 os.chdir(Path(__file__).resolve().parent.parent)
@@ -66,145 +62,32 @@ def fetch_details(paper_ids):
     handle.close()
     return found
 
-def follows_grammar(query: str) -> bool:
+def generate_query(disease, normalized_target_disease):
     """
-    Checks if the provided PubMed query string follows the defined grammar rules.
+    Generates a generalized PubMed search query from a file of topics.
+    If the file doesn't exist, it creates it with the target disease.
+    For each topic, it searches in Title/Abstract and MeSH terms.
     Args:
-        query: The PubMed query string to be validated.
+        disease: The name of the disease.
 
     Returns:
-        bool: True if the query follows the grammar, False otherwise.
+        The generated PubMed search query.
     """
-    pubmed_grammar = r"""
-        ?query: or_expr
-
-        or_expr: and_expr (_OR and_expr)*
-
-        and_expr: atom+
-
-        atom: main_body (_LBRACKET tag_body _RBRACKET)?
-            | _LPAREN or_expr _RPAREN
-
-        main_body: QUOTED_STRING | unquoted_main_body
-
-        unquoted_main_body: IDENTIFIER _ASTERISK?
-
-        tag_body: IDENTIFIER+
-
-        QUOTED_STRING: /"[^"]+"/
-
-        _AND: "AND"
-        _OR: "OR"
-        _LPAREN: "("
-        _RPAREN: ")"
-        _LBRACKET: "["
-        _RBRACKET: "]"
-
-        _ASTERISK: "*"
-
-        IDENTIFIER: /[a-zA-Z0-9_.:\/\-]+/
-
-        %import common.WS
-        %ignore WS
-    """
-
-    try:
-        pubmed_parser = Lark(pubmed_grammar, start='query', parser='lalr')
-    except Exception as e:
-        print(f"Erro ao criar o parser (gramática inválida?): {e}")
-        pubmed_parser = None
-
-    if not pubmed_parser:
-        print("Parser não foi inicializado corretamente.")
-        return False
-    if not query.strip():
-        return False
-    try:
-        pubmed_parser.parse(query)
-        return True
-    except LarkError as e:
-        print(query)
-        print(f"--> Detalhe do erro do Lark: {e}")
-        return False
-
-def generate_query(disease):
-    """
-    Generates a PubMed search query for a given disease using Google GenAI. TODO: change to a local model.
-    Args:
-        disease: The name of the disease for which to generate the query.
-
-    Returns:
-        response.text: The generated PubMed search query.
-    """
-    client = genai.Client(api_key=MY_API_KEY)
-
-    prompt = f"""
-    Generate a comprehensive and optimized PubMed search query to retrieve as many biomedical papers as possible that will help a word embedding model learn meaningful relationships between {disease}, compounds and treatments.
-        
-    The query should:
+    topics_file = f'./data/{normalized_target_disease}/topics_of_interest.txt'
+    if not os.path.exists(topics_file):
+        with open(topics_file, 'w', encoding='utf-8') as f:
+            f.write(disease + '\n')
     
-    Include MeSH terms and common synonyms for {disease}
-    Use logical operators (AND, OR) and parentheses for clarity
-    
-    Output ONLY the final query in a format suitable for use directly in PubMed with no additional text or information.
-    """
-    response = client.models.generate_content(model='gemini-2.5-flash-lite-preview-06-17', contents=prompt)
-    if not follows_grammar(response.text):
-        prompt = f"""
-        The following text is a PubMed query that contains syntax errors:
-        "{response.text}"
-        
-        Correct this query so it adheres to PubMed query grammar, while preserving the original search intent as closely as possible.
-        
-        Your entire response should be *only* the corrected PubMed query string. Do not include any explanations, apologies, or any text other than the corrected query itself.
-        """
-        response = client.models.generate_content(model='gemini-2.5-flash-lite-preview-06-17', contents=prompt)
-    if not follows_grammar(response.text):
-        print('Query does not follow grammar rules. Exiting.')
-        exit(1)
-    return response.text
-
-def canonize_disease_name(disease):
-    """
-    Generates the canonical name of a disease using Google GenAI. TODO: change to a local solution.
-    Args:
-        disease: The name of the disease to be canonized.
-
-    Returns:
-        response.text: The canonical name of the disease in lower case and without punctuation.
-    """
-    client = genai.Client(api_key=MY_API_KEY)
-
-    prompt = f"""
-    What is the canonical, most used and correct name of the disease "{disease}"?
-
-    Output ONLY the name of the disease, without any additional text or information, in lower case and no punctuation.
-    """
-    response = client.models.generate_content(model='gemini-2.5-flash-lite-preview-06-17', contents=prompt)
-
-    return response.text
-
-def grammar_testing(iterations, target_disease):
-    """
-    Testing function. It tries to force errors in the grammar checking function by generating queries repeatedly.
-    Args:
-        iterations: Number of iterations to run the test.
-        target_disease: Name of the target disease for which to generate queries.
-
-    Returns:
-        Nothing.
-    """
-    for i in range(iterations):
-        query = generate_query(target_disease)
-        print(query)
-        sleep(30)
+    topics = list_from_file(topics_file)
+    sub_queries = [f'("{topic}"[Title/Abstract] OR "{topic}"[MeSH Terms])' for topic in topics]
+    query = " OR ".join(sub_queries)
+    return f'({query})'
 
 def main():
     # This is for the final version of the program. For now, we will use a hardcoded target disease as it's easier to test.
     target_disease = get_target_disease() # input('Enter a target disease: ')
     normalized_target_disease = get_normalized_target_disease()
 
-    target_disease = canonize_disease_name(target_disease)
     set_target_disease(target_disease)
     print(f'Target disease: {target_disease}')
 
@@ -214,27 +97,9 @@ def main():
     os.makedirs(raw_abstracts_path, exist_ok=True)
 
     # Generates a query to find relevant papers about the target disease.
-    # There is a grammar checking function that will ensure the query is valid.
-    query = generate_query(target_disease)
+    query = generate_query(target_disease, normalized_target_disease)
     print(f'Query: {query}')
     paper_counter = 0
-
-    """
-    (Leukemia, Myeloid, Acute[MeSH] OR AML OR "Acute Myeloid Leukemia" OR "Acute Myelogenous Leukemia" OR "Myeloid Leukemia, Acute" OR "Acute Myelogenous Leukemias") AND (Compounds[MeSH] OR Drug OR Drugs OR Agent OR Agents OR Compound OR "Chemical Compound" OR "Chemical Compounds" OR Therapy OR Therapies OR Treatment OR Treatments OR "Drug Therapy" OR "Drug Therapies" OR Chemotherapy OR Chemotherapies OR "Targeted Therapy" OR "Targeted Therapies" OR Immunotherapy OR Immunotherapies OR "Biologic Therapy" OR "Biologic Therapies" OR "Small Molecule" OR "Small Molecules")
-    --> Detalhe do erro do Lark: No terminal matches ',' in the current parser context, at line 1 col 10
-    
-    (Leukemia, Myeloid, Acute[MeSH] OR AML OR "Acute 
-             ^
-    Expected one of: 
-        * _RPAREN
-        * _LPAREN
-        * _LBRACKET
-        * _ASTERISK
-        * IDENTIFIER
-        * QUOTED_STRING
-    
-    Previous tokens: Token('IDENTIFIER', 'Leukemia')
-    """
 
     # From now on, everything will be tied to the target disease, being stored in a folder named after it inside the ./data folder.
 

@@ -45,6 +45,15 @@ def main():
         # Splits the abstracts into words.
         abstracts_in_range = [x.split() for x in abstracts_in_range]
 
+        # --- Gemini Edit Start ---
+        # If there are not enough abstracts, vocabulary building will fail.
+        # Skip this year if the corpus is too small.
+        MINIMUM_CORPUS_SIZE = 10  # Set a reasonable threshold
+        if len(abstracts_in_range) < MINIMUM_CORPUS_SIZE:
+            print(f"Warning: Corpus for year {current_year} is too small ({len(abstracts_in_range)} abstracts). Skipping.")
+            continue
+        # --- Gemini Edit End ---
+
         # Trains the model with the abstracts in the year range.
         if model_type == 'w2v':
             model = Word2Vec(
