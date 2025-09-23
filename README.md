@@ -36,7 +36,7 @@ The final output is an explainable report that provides context and evidence, he
 ## Key Features
 
 -   **End-to-End Pipeline**: A fully automated, menu-driven script (`run_pipeline.py`) that executes all steps from data collection to final report generation.
--   **Dynamic Query Generation**: Leverages the Google Gemini API (temporary?) to create optimized, complex search queries for PubMed, ensuring comprehensive data collection for any target disease.
+-   **Dynamic Query Generation**: Uses a topics of interest file to generate PubMed queries about subjects of interest for latent knowledge discovery regarding the target disease. Starts out with only the target disease and may be expanded with the best scoring compounds from the first run. This results in possible treatment compounds being added to the queries in the second run, expanding the context from only target-disease-related to general.
 -   **Year-Over-Year Analysis**: Trains NLP models on cumulative, year-by-year corpora to track the evolution of semantic relationships over decades.
 -   **Domain-Specific NER**: Uses specialized biomedical NER models (`en_ner_bc5cdr_md`) to accurately identify chemical and drug entities within the text.
 -   **Scalable Data Processing**: Employs PySpark for efficient cleaning, normalization, and preparation of large text corpora.
@@ -49,7 +49,7 @@ This project is structured as a sequential pipeline, in which each script perfor
 
 1.  **`1_crawler.py` - PubMed Crawler**:
     -   Takes a user-defined disease as input.
-    -   Uses the Google Gemini API to generate a robust PubMed search query (temporary?).
+    -   Uses a topics of interest file to fetch queries not only related to the disease, but everything else in it.
     -   Fetches the IDs and abstracts of all relevant papers and saves them as individual text files.
 
 2.  **`2_merge_txt.py` - Corpus Aggregator**:

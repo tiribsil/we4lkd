@@ -114,3 +114,7 @@ Nova ideia: Implementar um "Fator de Especificidade Terapêutica" (O mais podero
 # robusta de resolver o problema de "suporte vs. direto".
 
 Não fiz ideia ainda, estou tentando pegar a lista gerada pelo get_best_treatment_compounds e adicionar nos tópicos de interesse. Esse tópicos de interesse é um arquivo novo que usei pra substituir o uso do gemini no crawler, agora ele gera uma query bem genérica e simples pra cada linha nesse arquivo. Inicialmente, o arquivo é apenas a doença alvo, mas o código roda até a etapa 7, gera essa lista de interesse, adiciona no arquivo, e roda do zero. A ideia é incluir artigos sobre compostos relacionados a doença. Nem todos são tratamentos, mas pelo menos é alguma coisa.
+
+Não deu muito certo, só idarubicin foi bom, primeira notificação em 1979. Vou tentar manualmente colocar tópicos de interesse agora (isso acabou sendo pegar só os top 3 da lista de get_best_treatment_compounds).
+
+Também não deu muito certo, resultados parecidos.
