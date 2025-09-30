@@ -1,14 +1,13 @@
 import os
-import sys
 from pathlib import Path
+os.chdir(Path(__file__).resolve().parent.parent)
 
-from utils import *
+import sys
+
+from src.utils import *
 
 TOP_N = 30
 HEADER_NAME = 'chemical_name'
-
-os.chdir(Path(__file__).resolve().parent.parent)
-
 
 def main():
     """

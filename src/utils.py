@@ -1,7 +1,6 @@
 import string
 from pathlib import Path
 
-
 def get_target_disease():
     try:
         with open('target_disease.txt', 'r') as file:

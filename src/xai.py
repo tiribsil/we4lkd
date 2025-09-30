@@ -1,7 +1,9 @@
+import os
+os.chdir(Path(__file__).resolve().parent.parent)
+
 import glob
 import itertools
 import json
-import os
 from time import sleep
 
 import pandas as pd
@@ -9,8 +11,6 @@ from google import genai
 
 from api_key import MY_API_KEY
 from src.utils import *
-
-os.chdir(Path(__file__).resolve().parent.parent)
 
 def extract_co_occurrence_contexts(corpus_df, target_chemical, target_disease, year, window_size=20):
     """
@@ -94,14 +94,15 @@ def sort_by_sentences(sentences_by_compound):
     """
     return dict(sorted(sentences_by_compound.items(), key=lambda item: len(item[1]), reverse=True))
 
-def explanation_for_chemical(target_disease, chemical, sentences, n_sentences=3):
+def explanation_for_chemical(target_disease: str, chemical: str, sentences: list, n_sentences: int, gemini_model_name: str):
     """
     Generates an explanation for the relationship between a chemical and a target disease based on provided sentences.
     Args:
-        target_disease: The disease to analyze.
-        chemical: The chemical to analyze.
-        sentences: The sentences containing information about the chemical and disease.
-        n_sentences: The number of sentences to be analyzed.
+        target_disease (str): The disease to analyze.
+        chemical (str): The chemical to analyze.
+        sentences (list): The sentences containing information about the chemical and disease.
+        n_sentences (int): The number of sentences to be analyzed.
+        gemini_model_name (str): The name of the Gemini model to use for generating explanations.
 
     Returns:
         str: A hypothesis about the potential therapeutic or biological relationship between the chemical and the disease.
@@ -118,19 +119,26 @@ def explanation_for_chemical(target_disease, chemical, sentences, n_sentences=3)
     for sentence in sentences[:n_sentences]:
         prompt += f"\n- {sentence}"
 
-    response = client.models.generate_content(model='gemini-2.5-flash-lite-preview-06-17', contents=prompt)
+    response = client.models.generate_content(model=gemini_model_name, contents=prompt)
 
     return response.text
 
-def main():
-    target_disease = get_target_disease()
-    normalized_target_disease = get_normalized_target_disease()
+def generate_xai_explanations(target_disease: str, normalized_target_disease: str, model_type: str = 'w2v', num_sentences_for_explanation: int = 3, num_compounds_for_xai: int = 10, co_occurrence_window_size: int = 20, gemini_model_name: str = 'gemini-2.5-flash-lite-preview-06-17', sleep_between_explanations: int = 30):
+    """
+    Generates XAI (Explainable AI) explanations for the relationship between top compounds and a target disease.
+
+    Args:
+        target_disease (str): The name of the target disease.
+        normalized_target_disease (str): The normalized name of the target disease, used for file paths.
+        model_type (str): The type of word embedding model used ('w2v' or 'ft'). Defaults to 'w2v'.
+        num_sentences_for_explanation (int): The number of top sentences to use for generating each explanation. Defaults to 3.
+        num_compounds_for_xai (int): The number of top compounds to generate explanations for. Defaults to 10.
+        co_occurrence_window_size (int): The number of words before and after the chemical to include in the context window for co-occurrence extraction. Defaults to 20.
+        gemini_model_name (str): The name of the Gemini model to use for generating explanations. Defaults to 'gemini-2.5-flash-lite-preview-06-17'.
+        sleep_between_explanations (int): Time in seconds to sleep between generating explanations to avoid API rate limits. Defaults to 30.
+    """
 
     # Must be either 'w2v' or 'ft'.
-    model_type = 'w2v'
-    n_sentences = 3
-    n_compounds = 10
-
     if model_type not in ['w2v', 'ft']:
         print('Model type must be either "w2v" or "ft".')
         return
@@ -195,4 +203,4 @@ def main():
             print(xai_output)
 
 if __name__ == '__main__':
-    main()
+    generate_xai_explanations(get_target_disease(), get_normalized_target_disease())

@@ -1,12 +1,12 @@
 import os
-
-from Bio import Entrez
 from pathlib import Path
-
-from src.utils import *
 
 # This makes sure the script runs from the root of the project, so relative paths work correctly.
 os.chdir(Path(__file__).resolve().parent.parent)
+
+from Bio import Entrez
+
+from src.utils import *
 
 def list_from_file(file_path):
     """
@@ -24,37 +24,46 @@ def list_from_file(file_path):
     except FileNotFoundError: pass
     return strings_list
 
-def search(query):
+def search(query: str, entrez_email: str, retmax_papers: str, start_year: int, end_year: int):
     """
-    Searches for papers in PubMed using the provided query.
+    Searches for papers in PubMed using the provided query within a date range.
     Args:
-        query: The search query for PubMed.
+        query (str): The search query for PubMed.
+        entrez_email (str): Email address for Entrez API.
+        retmax_papers (str): Maximum number of papers to retrieve from PubMed.
+        start_year (int): The starting year for the publication date range.
+        end_year (int): The ending year for the publication date range.
 
     Returns:
         found: A dictionary containing the search results.
     """
-    final_query = f'{query} AND English[Language]'
-    Entrez.email = 'tirs@estudante.ufscar.br'
+    date_filter = f"AND ((\"{start_year}/01/01\"[Date - Publication] : \"{end_year}/12/31\"[Date - Publication]))"
+    final_query = f'({query} AND English[Language]) {date_filter}'
+
+    print(f"Executing PubMed Query: {final_query}")
+
+    Entrez.email = entrez_email
     handle = Entrez.esearch(db='pubmed',
                             sort='relevance',
-                            retmax='999999',
+                            retmax=retmax_papers,
                             retmode='xml',
                             term=final_query)
     found = Entrez.read(handle)
     handle.close()
     return found
 
-def fetch_details(paper_ids):
+def fetch_details(paper_ids: list, entrez_email: str):
     """
     Fetches detailed information about papers from PubMed using their IDs.
     Args:
-        paper_ids: A list of PubMed paper IDs.
+        paper_ids (list): A list of PubMed paper IDs.
+        entrez_email (str): Email address for Entrez API.
 
     Returns:
         found: A dictionary containing detailed information about the papers.
     """
     ids_string = ','.join(paper_ids)
-    Entrez.email = 'tirs@estudante.ufscar.br'
+    Entrez.email = entrez_email
     handle = Entrez.efetch(db='pubmed',
                            retmode='xml',
                            id=ids_string)
@@ -73,6 +82,9 @@ def generate_query(disease, normalized_target_disease):
     Returns:
         The generated PubMed search query.
     """
+
+    # TODO: fazer usar todos os sinônimos de cada termo em vez de simplesmente o termo
+
     topics_file = f'./data/{normalized_target_disease}/topics_of_interest.txt'
     if not os.path.exists(topics_file):
         with open(topics_file, 'w', encoding='utf-8') as f:
@@ -83,10 +95,24 @@ def generate_query(disease, normalized_target_disease):
     query = " OR ".join(sub_queries)
     return f'({query})'
 
-def main():
+def run_pubmed_crawler(target_disease: str, normalized_target_disease: str,
+                       start_year: int, end_year: int,
+                       entrez_email: str = 'tirs@estudante.ufscar.br',
+                       retmax_papers: str = '999999'):
+    """
+    Fetches and saves PubMed papers related to a target disease for a specific year range.
+
+    Args:
+        target_disease (str): The name of the disease to search for.
+        normalized_target_disease (str): The normalized name of the target disease.
+        start_year (int): The start year of the search range.
+        end_year (int): The end year of the search range.
+        entrez_email (str): Email address for Entrez API.
+        retmax_papers (str): Maximum number of papers to retrieve from PubMed.
+    """
     # This is for the final version of the program. For now, we will use a hardcoded target disease as it's easier to test.
-    target_disease = get_target_disease() # input('Enter a target disease: ')
-    normalized_target_disease = get_normalized_target_disease()
+    # target_disease = input('Enter a target disease: ')
+    # normalized_target_disease = get_normalized_target_disease()
 
     set_target_disease(target_disease)
     print(f'Target disease: {target_disease}')
@@ -112,8 +138,9 @@ def main():
     print(f'Searching for papers...')
 
     # Looks for papers matching the query and stores their IDs in a list.
-    new_paper_id_list = list(search(query)['IdList'])
-    # Keeps only the IDs that are not already in the set of old papers.
+    search_results = search(query, entrez_email, retmax_papers, start_year, end_year)
+    new_paper_id_list = list(search_results['IdList'])
+    # Keeps only the IDs that are not already in the set of old papers.!
     new_paper_id_list = [x for x in new_paper_id_list if x not in downloaded_paper_ids]
 
     # If nothing new was found, exits the program. All papers matching the query were already downloaded.
@@ -124,7 +151,7 @@ def main():
     print(f'{len(new_paper_id_list)} papers found\n')
 
     # Fetches the details of the new papers.
-    papers = fetch_details(new_paper_id_list)
+    papers = fetch_details(new_paper_id_list, entrez_email)
 
     # For each paper found...
     for paper in papers['PubmedArticle']:
@@ -173,4 +200,4 @@ def main():
     print(f'Crawler finished with {len(old_papers) + paper_counter} papers collected.')
 
 if __name__ == '__main__':
-    main()
+    run_pubmed_crawler(get_target_disease(), get_normalized_target_disease())

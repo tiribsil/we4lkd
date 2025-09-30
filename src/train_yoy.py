@@ -1,13 +1,26 @@
 import os
+from pathlib import Path
+os.chdir(Path(__file__).resolve().parent.parent)
 
 from gensim.models import Word2Vec, FastText
 import pandas as pd
 from src.utils import *
 
-os.chdir(Path(__file__).resolve().parent.parent)
+def train_word_embedding_models(normalized_target_disease: str, model_type: str = 'w2v', w2v_parameters_combination: list = None, ft_parameters_combination: list = None, min_count: int = 5, sg: int = 1, hs: int = 0, epochs: int = 15, min_corpus_size: int = 10):
+    """
+    Trains Word2Vec or FastText models year-over-year based on cleaned abstracts.
 
-def main():
-    normalized_target_disease = get_normalized_target_disease()
+    Args:
+        normalized_target_disease (str): The normalized name of the target disease, used for file paths.
+        model_type (str): The type of model to train ('w2v' for Word2Vec or 'ft' for FastText). Defaults to 'w2v'.
+        w2v_parameters_combination (list): A list of parameter combinations for Word2Vec models. Each sublist should contain [vector_size, alpha, negative]. Defaults to [[100, 0.0025, 10], [200, 0.025, 15]].
+        ft_parameters_combination (list): A list of parameter combinations for FastText models. Each sublist should contain [vector_size, alpha, negative]. Defaults to [[300, 0.0025, 5]].
+        min_count (int): Ignores all words with total frequency lower than this. Defaults to 5.
+        sg (int): Training algorithm: 1 for skip-gram, 0 for CBOW. Defaults to 1.
+        hs (int): If 1, hierarchical softmax will be used for model training. If 0 (default), and `negative` is non-zero, negative sampling will be used. Defaults to 0.
+        epochs (int): Number of iterations (epochs) over the corpus. Defaults to 15.
+        min_corpus_size (int): Minimum number of abstracts required to train a model for a given year range. Defaults to 10.
+    """
 
     w2v_path = f'./data/{normalized_target_disease}/models/w2v_combination15/'
     ft_path = f'./data/{normalized_target_disease}/models/ft_combination16/'
@@ -16,13 +29,13 @@ def main():
     os.makedirs(ft_path, exist_ok=True)
 
     # Determines what kind of model will be trained.
-    model_type = 'w2v'
     if model_type not in ['w2v', 'ft']:
         raise ValueError("model_type must be either 'w2v' or 'ft'")
 
     # Sets the parameters for the models.
-    if model_type == 'w2v': parameters_combination = [[100, 0.0025, 10], [200, 0.025, 15]]
-    else: parameters_combination = [[300, 0.0025, 5]]
+    if parameters_combination is None:
+        if model_type == 'w2v': parameters_combination = [[100, 0.0025, 10], [200, 0.025, 15]]
+        else: parameters_combination = [[300, 0.0025, 5]]
 
     # Reads the DataFrame with the clean abstracts.
     print('Reading clean abstracts...')
@@ -45,24 +58,21 @@ def main():
         # Splits the abstracts into words.
         abstracts_in_range = [x.split() for x in abstracts_in_range]
 
-        # --- Gemini Edit Start ---
         # If there are not enough abstracts, vocabulary building will fail.
         # Skip this year if the corpus is too small.
-        MINIMUM_CORPUS_SIZE = 10  # Set a reasonable threshold
-        if len(abstracts_in_range) < MINIMUM_CORPUS_SIZE:
+        if len(abstracts_in_range) < min_corpus_size:
             print(f"Warning: Corpus for year {current_year} is too small ({len(abstracts_in_range)} abstracts). Skipping.")
             continue
-        # --- Gemini Edit End ---
 
         # Trains the model with the abstracts in the year range.
         if model_type == 'w2v':
             model = Word2Vec(
                 sentences=abstracts_in_range,
                 sorted_vocab=True,
-                min_count=5,
-                sg=1,
-                hs=0,
-                epochs=15,
+                min_count=min_count,
+                sg=sg,
+                hs=hs,
+                epochs=epochs,
                 vector_size=parameters_combination[1][0],
                 alpha=parameters_combination[1][1],
                 negative=parameters_combination[1][2]
@@ -73,10 +83,10 @@ def main():
             model = FastText(
                 sentences=abstracts_in_range,
                 sorted_vocab=True,
-                min_count=5,
-                sg=1,
-                hs=0,
-                epochs=15,
+                min_count=min_count,
+                sg=sg,
+                hs=hs,
+                epochs=epochs,
                 vector_size=parameters_combination[0][0],
                 alpha=parameters_combination[0][1],
                 negative=parameters_combination[0][2])
@@ -85,4 +95,4 @@ def main():
     print('Finished model training.')
 
 if __name__ == '__main__':
-    main()
+    train_word_embedding_models(get_normalized_target_disease(),)

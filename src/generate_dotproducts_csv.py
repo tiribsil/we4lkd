@@ -1,4 +1,7 @@
 import os
+from pathlib import Path
+os.chdir(Path(__file__).resolve().parent.parent)
+
 import re
 
 from gensim.models import Word2Vec, FastText
@@ -6,9 +9,6 @@ import numpy as np
 import pandas as pd
 
 from src.utils import *
-
-os.chdir(Path(__file__).resolve().parent.parent)
-
 
 def get_embedding_of_word(word, model, method):
     """
@@ -80,11 +80,20 @@ def load_drugs_from_chembl_refined():
         print(f"Ocorreu um erro ao conectar com a API do ChEMBL: {e}")
         return set()
 
-def get_therapeutic_compounds(normalized_target_disease):
+def get_therapeutic_compounds(normalized_target_disease: str, biomolecule_blacklist: set = None):
     """
-    Cria uma whitelist de compostos terapêuticos com filtros aprimorados para remover
-    ruído biológico e focar em tratamentos específicos.
+    Creates a whitelist of therapeutic compounds with enhanced filters to remove
+    biological noise and focus on specific treatments.
+
+    Args:
+        normalized_target_disease (str): The normalized name of the target disease.
+        biomolecule_blacklist (set): A set of biomolecules to exclude from the whitelist.
+                                     Defaults to a predefined set of common biomolecules.
+
+    Returns:
+        filtered_whitelist (set): A set of normalized therapeutic compound names.
     """
+
     pubchem_syn_path = "./data/pubchem_data/CID-Synonym-filtered"
     pubchem_title_path = "./data/pubchem_data/CID-Title"
 
@@ -118,37 +127,38 @@ def get_therapeutic_compounds(normalized_target_disease):
     final_whitelist_set = set(normalized_titles.dropna().unique())
     print(f"Whitelist (antes da exclusão) criada com {len(final_whitelist_set)} nomes canônicos.")
 
-    # --- MUDANÇA 2: Aplicar uma blacklist para remover ruído biológico comum ---
-    # Esta lista contém moléculas que, embora tecnicamente possam ser "drogas",
-    # são onipresentes em textos biológicos e não representam o tratamento principal.
-    BIOMOLECULE_BLACKLIST = {
-        # Nucleosídeos e bases
-        'thymidine', 'deoxycytidine', 'uridine', 'cytidine', 'adenosine', 'guanine', 'cytosine', 'thymine',
-        # Aminoácidos comuns
-        'aminoacids', 'glutathione', 'arginine', 'lysine', 'valine', 'citrulline', 'leucine', 'isoleucine',
-        # Metabólitos e vitaminas
-        'cholesterol', 'histamine', 'folicacid', 'cholecalciferol', 'retinoicacid', 'nicotinicacid', 'alpha-tocopherol',
-        # Íons e elementos simples (a busca no ChEMBL já deve remover a maioria)
-        'lithium', 'magnesium', 'oxygen', 'nitrogen', 'platinum', 'hydrogenperoxide', 'radium', 'potassium',
-        # Reagentes de laboratório e excipientes
-        'agar', 'hemin', 'phorbol12-myristate13-acetate', 'methylcellulose(4000cps)',
-        # Outros
-        'insulin', 'triphosphate', 'histaminedihydrochloride'
+    if biomolecule_blacklist is None:
+        biomolecule_blacklist = {
+            'thymidine', 'deoxycytidine', 'uridine', 'cytidine', 'adenosine', 'guanine', 'cytosine', 'thymine',
+            'aminoacids', 'glutathione', 'arginine', 'lysine', 'valine', 'citrulline', 'leucine', 'isoleucine',
+            'cholesterol', 'histamine', 'folicacid', 'cholecalciferol', 'retinoicacid', 'nicotinicacid', 'alpha-tocopherol',
+            'lithium', 'magnesium', 'oxygen', 'nitrogen', 'platinum', 'hydrogenperoxide', 'radium', 'potassium',
+            'agar', 'hemin', 'phorbol12-myristate13-acetate', 'methylcellulose(4000cps)',
+            'insulin', 'triphosphate', 'histaminedihydrochloride', 'water'
     }
 
     # Filtra a whitelist final removendo os itens da blacklist
-    filtered_whitelist = final_whitelist_set - BIOMOLECULE_BLACKLIST
+    filtered_whitelist = final_whitelist_set - biomolecule_blacklist
     
     print(f"Removidos {len(final_whitelist_set) - len(filtered_whitelist)} compostos genéricos da whitelist.")
     print(f"Whitelist final e filtrada contém {len(filtered_whitelist)} compostos.")
     
     return filtered_whitelist
 
-def main():
-    normalized_target_disease = get_normalized_target_disease()
+def generate_compound_dot_products_csv(normalized_target_disease: str, model_type: str = 'w2v', embedding_method: str = 'da', biomolecule_blacklist: set = None):
+    """
+    Generates CSV files containing historical dot products and Euclidean distances
+    between compound embeddings and the target disease embedding.
+
+    Args:
+        normalized_target_disease (str): The normalized name of the target disease.
+        model_type (str): The type of word embedding model to use ('w2v' or 'ft'). Defaults to 'w2v'.
+        embedding_method (str): The method to get word embeddings ('da' for direct access or 'avg' for average of embeddings). Defaults to 'da'.
+        biomolecule_blacklist (set): A set of biomolecules to exclude from the whitelist.
+                                     Defaults to a predefined set of common biomolecules.
+    """
 
     # Sets the model type and parameter combination.
-    model_type = 'w2v'
     if model_type not in ['w2v', 'ft']:
         print('Invalid validation type, has to be either "w2v" or "ft".')
         return
@@ -289,4 +299,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    generate_compound_dot_products_csv(get_normalized_target_disease)

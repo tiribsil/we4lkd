@@ -1,4 +1,7 @@
 import os
+from pathlib import Path
+os.chdir(Path(__file__).resolve().parent.parent)
+
 import jinja2
 import pandas as pd
 from matplotlib import pyplot as plt
@@ -6,9 +9,6 @@ from datetime import date
 from tikzplotlib import get_tikz_code
 
 from src.utils import *
-
-os.chdir(Path(__file__).resolve().parent.parent)
-
 
 def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combination, metric, year, top_n=20):
     """
@@ -71,18 +71,21 @@ def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combi
     return [file_path for _, file_path, _ in top_scores]
 
 
-def generate_historical_plots(csv_files_to_plot, target_disease, column_to_plot, year_range):
+def generate_latent_knowledge_report(target_disease: str, normalized_target_disease: str, metrics_to_plot: list = None, w2v_combination: str = '15', ft_combination: str = '16', top_n_compounds: int = 20):
     """
-    Generates a set of historical plots and returns the corresponding TikZ code. (This function did not need changes, as it already plots the complete time series of the files it receives, which is the desired behavior).
+    Generates a LaTeX report with historical plots of compound-disease relationships.
 
     Args:
-        target_disease: The target disease for which the plots are generated.
-        csv_files_to_plot: List of paths to the CSV files to be plotted.
-        column_to_plot: The name of the column to be used for the Y axis of the plots.
-        year_range: The range of years (start, end) for the X axis.
-
-    Returns:
-        str: A string containing the TikZ code for the plots.
+        target_disease (str): The name of the target disease.
+        normalized_target_disease (str): The normalized name of the target disease, used for file paths.
+        metrics_to_plot (list): A list of metrics to plot (e.g., 'normalized_dot_product').
+                                Defaults to ['normalized_dot_product', 'delta_normalized_dot_product', 'euclidian_distance'].
+        w2v_combination (str): The parameter combination identifier for Word2Vec models. Defaults to '15'.
+        ft_combination (str): The parameter combination identifier for FastText models. Defaults to '16'.
+        top_n_compounds (int): The number of top compounds to select for plotting each year. Defaults to 20.
+        latex_template_path (str): The path to the Jinja2 LaTeX template file. Defaults to './data/latent_knowledge_template.tex'.
+        output_report_dir (str): The directory where the generated LaTeX report will be saved.
+                                 If None, it will be constructed using normalized_target_disease.
     """
     all_plots_data = []
     for file_path in csv_files_to_plot:
@@ -146,11 +149,8 @@ def main():
 
     plots_data = {}
 
-    metrics_to_plot = [
-        'normalized_dot_product',
-        'delta_normalized_dot_product',
-        'euclidian_distance',
-    ]
+    if metrics_to_plot is None:
+        metrics_to_plot = ['normalized_dot_product', 'delta_normalized_dot_product', 'euclidian_distance']
 
     start_year, end_year = get_corpus_year_range(normalized_target_disease)
     year_range = (start_year, end_year)
@@ -235,4 +235,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    generate_latent_knowledge_report(get_target_disease(), get_normalized_target_disease())

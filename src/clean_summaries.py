@@ -1,20 +1,20 @@
+import os
+from pathlib import Path
+os.chdir(Path(__file__).resolve().parent.parent)
+
 import re
 
 from Bio import Entrez
-
-Entrez.email = "tirs@estudante.ufscar.br"
 
 import pyspark.sql.functions as F
 from pyspark.sql.session import SparkSession
 from pyspark.sql.window import Window
 from src.utils import *
 
-import nltk, os
+import nltk
 from nltk.tokenize import word_tokenize
 
 from functools import reduce
-
-os.chdir(Path(__file__).resolve().parent.parent)
 
 def ss():
     spark = SparkSession.builder \
@@ -30,7 +30,7 @@ def ss():
     return spark
 
 
-def dataframes_from_txt(summaries_path):
+def dataframes_from_txt(summaries_path, nature_filtered_words: list = None):
     # This part of your code is perfect. It correctly finds and sorts the files.
     filenames = sorted([str(x) for x in Path(summaries_path).glob('*.txt')])
     if not filenames:
@@ -50,14 +50,9 @@ def dataframes_from_txt(summaries_path):
             print(f"Warning: Could not extract year from filename {Path(file_path).name}. Skipping.")
             continue
 
-        nature_filtered_words_in_title = [
-            'foreword', 'prelude', 'commentary', 'workshop', 'conference', 'symposium',
-            'comment', 'retract', 'correction', 'erratum', 'memorial'
-        ]
-
         title_doesnt_have_nature_filtered_words = reduce(
             lambda acc, word: acc & (F.locate(word, F.lower(F.col('title'))) == F.lit(0)),
-            nature_filtered_words_in_title,
+            nature_filtered_words,
             F.lit(True)
         )
 
@@ -155,14 +150,34 @@ def tokenize(data):
         return word_tokenize(data)
 
 
-def find_mesh_terms(disease_name):
+def find_mesh_terms(disease_name: str, entrez_email: str):
+    """
+    Searches for MeSH terms related to a disease name.
+    Args:
+        disease_name (str): The name of the disease to search for.
+        entrez_email (str): Email address for Entrez API.
+
+    Returns:
+        list: A list of MeSH IDs.
+    """
+    Entrez.email = entrez_email
     handle = Entrez.esearch(db="mesh", term=f"\"{disease_name}\"[MeSH Terms] ", retmax="20")
     record = Entrez.read(handle)
     handle.close()
     return record["IdList"]
 
 
-def get_mesh_details(mesh_id):
+def get_mesh_details(mesh_id: str, entrez_email: str):
+    """
+    Fetches detailed information for a given MeSH ID.
+    Args:
+        mesh_id (str): The MeSH ID to fetch details for.
+        entrez_email (str): Email address for Entrez API.
+
+    Returns:
+        str: XML records for the MeSH ID.
+    """
+    Entrez.email = entrez_email
     handle = Entrez.efetch(db="mesh", id=mesh_id, retmode="xml")
     records = handle.read()
     handle.close()
@@ -190,13 +205,14 @@ def get_mesh_disease_synonyms(disease_details):
     return synonyms
 
 
-def summary_column_preprocessing(column, target_disease):
+def summary_column_preprocessing(column, target_disease: str, entrez_email: str):
     """Executes initial preprocessing in a PySpark text column. It removes some unwanted regex from the text.
     Args:
-        target_disease:
         column: the name of the column to be processed.
+        target_disease (str): The name of the target disease.
+        entrez_email (str): Email address for Entrez API.
     """
-    disease_details = get_mesh_details(find_mesh_terms(target_disease))
+    disease_details = get_mesh_details(find_mesh_terms(target_disease, entrez_email), entrez_email)
 
     disease_synonyms = get_mesh_disease_synonyms(disease_details)
     canonical_name = target_disease.lower().replace(' ', '_')
@@ -228,86 +244,10 @@ def summary_column_preprocessing(column, target_disease):
     return column
 
 
-def words_preprocessing(df, column='word'):
+def words_preprocessing(df, column='word', typo_corrections: dict = None, units_and_symbols_list: list = None):
     """Corrige alguns erros de digitação, normaliza alguns símbolos e remove palavras irrelevantes."""
 
-    fix_typos_dict = {
-        'mol-ecule': 'molecule',
-        '‑': '-',
-        '‒': '-',
-        '–': '-',
-        '—': '-',
-        '¯': '-',
-        'à': 'a',
-        'á': 'a',
-        'â': 'a',
-        'ã': 'a',
-        'ä': 'a',
-        'å': 'a',
-        'ç': 'c',
-        'è': 'e',
-        'é': 'e',
-        'ê': 'e',
-        'ë': 'e',
-        'í': 'i',
-        'î': 'i',
-        'ï': 'i',
-        'ñ': 'n',
-        'ò': 'o',
-        'ó': 'o',
-        'ô': 'o',
-        'ö': 'o',
-        '×': 'x',
-        'ø': 'o',
-        'ú': 'u',
-        'ü': 'u',
-        'č': 'c',
-        'ğ': 'g',
-        'ł': 'l',
-        'ń': 'n',
-        'ş': 's',
-        'ŭ': 'u',
-        'і': 'i',
-        'ј': 'j',
-        'а': 'a',
-        'в': 'b',
-        'н': 'h',
-        'о': 'o',
-        'р': 'p',
-        'с': 'c',
-        'т': 't',
-        'ӧ': 'o',
-        '⁰': '0',
-        '⁴': '4',
-        '⁵': '5',
-        '⁶': '6',
-        '⁷': '7',
-        '⁸': '8',
-        '⁹': '9',
-        '₀': '0',
-        '₁': '1',
-        '₂': '2',
-        '₃': '3',
-        '₅': '5',
-        '₇': '7',
-        '₉': '9',
-    }
-
-    units_and_symbols = [
-        '/μm', '/mol', '°c', '≥', '≤', '<', '>', '±', '%', '/mumol',
-        'day', 'month', 'year', '·', 'week', 'days',
-        'weeks', 'years', '/µl', 'μg', 'u/mg',
-        'mg/m', 'g/m', 'mumol/kg', '/week', '/day', 'm²', '/kg', '®',
-        'ﬀ', 'ﬃ', 'ﬁ', 'ﬂ', '£', '¥', '©', '«', '¬', '®', '°', '±', '²', '³',
-        '´', '·', '¹', '»', '½', '¿',
-         '׳', 'ᇞ​', '‘', '’', '“', '”', '•',  '˂', '˙', '˚', '˜' ,'…', '‰', '′',
-        '″', '‴', '€',
-        '™', 'ⅰ', '↑', '→', '↓', '∗', '∙', '∝', '∞', '∼', '≈', '≠', '≤', '≥', '≦', '≫', '⊘',
-        '⊣', '⊿', '⋅', '═', '■', '▵', '⟶', '⩽', '⩾', '、', '气', '益', '粒', '肾', '补',
-        '颗', '', '', '', '', '，'
-    ]
-
-    units_and_symbols_expr = '(%s)' % '|'.join(units_and_symbols)
+    units_and_symbols_expr = '(%s)' % '|'.join(units_and_symbols_list)
 
     def __keep_only_compound_numbers():
         return F.when(
@@ -316,17 +256,103 @@ def words_preprocessing(df, column='word'):
         ).otherwise(F.lower(F.col(column)))
 
     return df\
-            .replace(fix_typos_dict, subset=column)\
+            .replace(typo_corrections, subset=column)\
             .withColumn(column, F.regexp_replace(F.col(column), units_and_symbols_expr, ''))\
             .withColumn(column, __keep_only_compound_numbers())\
             .withColumn(column, F.trim(F.col(column)))\
             .where(F.length(F.col(column)) > F.lit(1))\
             .where(~F.col(column).isin(nltk.corpus.stopwords.words('english')))
 
+def clean_and_normalize_abstracts(target_disease: str, normalized_target_disease: str, batch_size: int = 500, entrez_email: str = "tirs@estudante.ufscar.br", nature_filtered_words: list = None, typo_corrections: dict = None, units_and_symbols_list: list = None):
+    if nature_filtered_words is None:
+        nature_filtered_words = [
+            'foreword', 'prelude', 'commentary', 'workshop', 'conference', 'symposium',
+            'comment', 'retract', 'correction', 'erratum', 'memorial'
+        ]
+    if typo_corrections is None:
+        typo_corrections = {
+            'mol-ecule': 'molecule',
+            '‑': '-',
+            '‒': '-',
+            '–': '-',
+            '—': '-',
+            '¯': '-',
+            'à': 'a',
+            'á': 'a',
+            'â': 'a',
+            'ã': 'a',
+            'ä': 'a',
+            'å': 'a',
+            'ç': 'c',
+            'è': 'e',
+            'é': 'e',
+            'ê': 'e',
+            'ë': 'e',
+            'í': 'i',
+            'î': 'i',
+            'ï': 'i',
+            'ñ': 'n',
+            'ò': 'o',
+            'ó': 'o',
+            'ô': 'o',
+            'ö': 'o',
+            '×': 'x',
+            'ø': 'o',
+            'ú': 'u',
+            'ü': 'u',
+            'č': 'c',
+            'ğ': 'g',
+            'ł': 'l',
+            'ń': 'n',
+            'ş': 's',
+            'ŭ': 'u',
+            'і': 'i',
+            'ј': 'j',
+            'а': 'a',
+            'в': 'b',
+            'н': 'h',
+            'о': 'o',
+            'р': 'p',
+            'с': 'c',
+            'т': 't',
+            'ӧ': 'o',
+            '⁰': '0',
+            '⁴': '4',
+            '⁵': '5',
+            '⁶': '6',
+            '⁷': '7',
+            '⁸': '8',
+            '⁹': '9',
+            '₀': '0',
+            '₁': '1',
+            '₂': '2',
+            '₃': '3',
+            '₅': '5',
+            '₇': '7',
+            '₉': '9',
+        }
+    if units_and_symbols_list is None:
+        units_and_symbols_list = [
+            '/μm', '/mol', '°c', '≥', '≤', '<', '>', '±', '%', '/mumol',
+            'day', 'month', 'year', '·', 'week', 'days',
+            'weeks', 'years', '/µl', 'μg', 'u/mg',
+            'mg/m', 'g/m', 'mumol/kg', '/week', '/day', 'm²', '/kg', '®',
+            'ﬀ', 'ﬃ', 'ﬁ', 'ﬂ', '£', '¥', '©', '«', '¬', '®', '°', '±', '²', '³',
+            '´', '·', '¹', '»', '½', '¿',
+            '׳', 'ᇞ​', '‘', '’', '“', '”', '•', '˂', '˙', '˚', '˜' , '…', '‰', '′',
+            '″', '‴', '€',
+            '™', 'ⅰ', '↑', '→', '↓', '∗', '∙', '∝', '∞', '∼', '≈', '≠', '≤', '≥', '≦', '≫', '⊘',
+            '⊣', '⊿', '⋅', '═', '■', '▵', '⟶', '⩽', '⩾', '、', '气', '益', '粒', '肾', '补',
+            '颗', '', '', '', '', '，'
+        ]
+    """
+    Cleans and normalizes aggregated abstract texts, replacing synonyms with canonical names.
 
-def main():
-    target_disease = get_target_disease()
-    normalized_target_disease = get_normalized_target_disease()
+    Args:
+        target_disease (str): The name of the disease for which abstracts are being cleaned.
+        normalized_target_disease (str): The normalized name of the target disease, used for file paths.
+        batch_size (int): The number of texts to process in each spaCy pipeline batch (used in process_abstracts_from_file, though not directly in this main function, it's a dependency). Defaults to 500.
+    """
 
     # Downloads NLTK data files if they are not already present.
     nltk.download('wordnet', quiet=True)
@@ -390,12 +416,12 @@ def main():
     print(f'Collected {len(compound_map_rows)} relevant compound terms for replacement.')
 
     # Loads the aggregated abstracts from the corpus.
-    df = dataframes_from_txt(aggregated_abstracts_path)
+    df = dataframes_from_txt(aggregated_abstracts_path, nature_filtered_words)
     print('Before any preprocessing:')
     df.show(truncate=False)
 
     # Apply initial preprocessing (removes HTML, special characters, etc.).
-    df = df.withColumn('summary', summary_column_preprocessing(F.col('summary'), target_disease))
+    df = df.withColumn('summary', summary_column_preprocessing(F.col('summary'), target_disease, entrez_email))
 
     # Replace multi-word compounds with their single-word equivalents BEFORE tokenizing.
     # Create a list of (term, replacement) tuples from the collected rows.
@@ -428,7 +454,7 @@ def main():
 
     # Perform final word-level cleaning (removes stopwords, etc.).
     # Then, reassemble the tokens into a final summary string.
-    df = words_preprocessing(df, column='word') \
+    df = words_preprocessing(df, column='word', typo_corrections=typo_corrections, units_and_symbols_list=units_and_symbols_list) \
         .withColumn('summary', F.collect_list('word').over(w2)) \
         .groupby('id', 'filename') \
         .agg(
@@ -449,4 +475,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    clean_and_normalize_abstracts(get_target_disease(), get_normalized_target_disease())

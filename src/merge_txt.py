@@ -1,10 +1,16 @@
 import os
 from pathlib import Path
+os.chdir(Path(__file__).resolve().parent.parent)
+
 from src.utils import *
 
-def main():
-    normalized_target_disease = get_normalized_target_disease()
+def aggregate_abstracts_by_year(normalized_target_disease: str):
+    """
+    Aggregates raw abstract text files by year into a single file per year range.
 
+    Args:
+        normalized_target_disease (str): The normalized name of the target disease, used for file paths.
+    """
     source_path = f'./data/{normalized_target_disease}/corpus/raw_abstracts'
     destination_path = f'./data/{normalized_target_disease}/corpus/aggregated_abstracts'
     os.makedirs(destination_path, exist_ok=True)
@@ -36,4 +42,4 @@ def main():
                     f_out.write(f"{title}|{content}\n")
 
 if __name__ == '__main__':
-    main()
+    aggregate_abstracts_by_year(get_normalized_target_disease())
