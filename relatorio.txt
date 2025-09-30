@@ -118,3 +118,5 @@ Não fiz ideia ainda, estou tentando pegar a lista gerada pelo get_best_treatmen
 Não deu muito certo, só idarubicin foi bom, primeira notificação em 1979. Vou tentar manualmente colocar tópicos de interesse agora (isso acabou sendo pegar só os top 3 da lista de get_best_treatment_compounds).
 
 Também não deu muito certo, resultados parecidos.
+
+Ideia da Luiza! Fazer os modelos serem incrementais, com a saída de um alimentando o crawler do próximo. Simula evolução do conhecimento.
