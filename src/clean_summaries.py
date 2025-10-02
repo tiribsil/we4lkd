@@ -31,7 +31,6 @@ def ss():
 
 
 def dataframes_from_txt(summaries_path, nature_filtered_words: list = None):
-    # This part of your code is perfect. It correctly finds and sorts the files.
     filenames = sorted([str(x) for x in Path(summaries_path).glob('*.txt')])
     if not filenames:
         print("Warning: No text files found in the specified path.")
@@ -43,7 +42,6 @@ def dataframes_from_txt(summaries_path, nature_filtered_words: list = None):
 
     for file_path in filenames:
         try:
-            # Using 'year_of_file' is good, but let's rename the final column for clarity
             year_of_file = Path(file_path).stem.split('_')[-1]
             int(year_of_file)
         except (IndexError, ValueError):

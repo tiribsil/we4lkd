@@ -9,12 +9,12 @@ sys.path.append(str(Path.cwd()))
 
 from src.utils import get_target_disease, get_normalized_target_disease, set_target_disease
 from src.crawler import run_pubmed_crawler
-from src.merge_txt import aggregate_abstracts_by_year
+from src.merge_txt import aggregate_abstracts_from_year
 from src.ner_table_generator import generate_ner_table
 from src.clean_summaries import clean_and_normalize_abstracts
 from src.train_yoy import train_word_embedding_models
 from src.generate_dotproducts_csv import generate_compound_dot_products_csv
-from src.latent_knowledge_report import main as generate_latent_knowledge_report
+from src.latent_knowledge_report import generate_latent_knowledge_report
 from src.get_best_treatment_candidates import main as get_best_treatment_candidates
 
 
@@ -80,7 +80,7 @@ def main_pipeline():
     print(f"--- Starting Pipeline for: {target_disease} ---")
 
     # The start year can be configured here.
-    start_year = 1980
+    start_year = 1970
     end_year = datetime.now().year
 
     # --- Pipeline Execution Loop ---
@@ -97,9 +97,9 @@ def main_pipeline():
             end_year=current_year
         )
 
-        # Step 2: Aggregate abstracts into files by year.
+        # Step 2: Aggregate abstracts into files from year.
         print("\n--- Step 2: Aggregating Abstracts ---")
-        aggregate_abstracts_by_year(normalized_target_disease)
+        aggregate_abstracts_from_year(normalized_target_disease, current_year)
 
         # Step 3: Generate NER table from the latest aggregated file.
         print("\n--- Step 3: Generating NER Table ---")
@@ -111,7 +111,7 @@ def main_pipeline():
 
         # Step 5: Train Word2Vec/FastText models year-over-year.
         print("\n--- Step 5: Training Word Embedding Models ---")
-        train_word_embedding_models(normalized_target_disease)
+        train_word_embedding_models(normalized_target_disease, start_year, current_year)
 
         # Step 6: Generate dot products CSV for compound-disease relationships.
         print("\n--- Step 6: Generating Compound Dot Products ---")
@@ -119,7 +119,7 @@ def main_pipeline():
 
         # Step 7: Generate the latent knowledge report.
         print("\n--- Step 7: Generating Latent Knowledge Report ---")
-        generate_latent_knowledge_report()
+        generate_latent_knowledge_report(target_disease, normalized_target_disease)
 
         # Step 8: Get the best treatment candidates based on the analysis.
         print("\n--- Step 8: Identifying Best Treatment Candidates ---")

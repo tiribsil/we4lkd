@@ -45,16 +45,13 @@ def process_abstracts_from_file(nlp_model, normalized_target_disease: str, relev
     if not input_folder_path.exists() or not input_folder_path.is_dir():
         return []
 
-    all_filenames = sorted([str(x) for x in input_folder_path.glob('*.txt')])
-
-    file_to_process = all_filenames[-1]
+    file_to_process = f'{input_folder_path}/aggregated_corpus.txt'
 
     print(f"Reading {file_to_process}...")
 
     ner_results = []
     texts_to_process_batch = []
-    # batch_size = 500 # Now a parameter
-
+    
     # Goes through each line (abstract) in the file, processes the text in batches, and saves the NER results in a list.
     with open(file_to_process, 'r', encoding='utf-8') as f:
         for line_number, line in enumerate(f, 1):

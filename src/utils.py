@@ -19,7 +19,7 @@ def get_normalized_target_disease():
 
 def get_corpus_year_range(normalized_target_disease):
     aggregated_files = sorted(
-        list(map(str, Path(f'./data/{normalized_target_disease}/corpus/aggregated_abstracts').glob('*.txt'))))
-
+    [str(p) for p in Path(f'./data/{normalized_target_disease}/corpus/aggregated_abstracts').glob('*.txt') if p.name != 'aggregated_corpus.txt']
+)
     year_range = int(Path(aggregated_files[0]).stem[-4:]), int(Path(aggregated_files[-1]).stem[-4:])
     return year_range[0], year_range[1]

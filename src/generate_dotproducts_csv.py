@@ -94,6 +94,20 @@ def get_therapeutic_compounds(normalized_target_disease: str, biomolecule_blackl
         filtered_whitelist (set): A set of normalized therapeutic compound names.
     """
 
+    cache_path = f'./data/compound_whitelist.txt'
+
+    if os.path.exists(cache_path):
+        print(f"Carregando whitelist a partir do arquivo de cache: {cache_path}")
+        with open(cache_path, 'r') as f:
+            # Lê cada linha, remove espaços/quebras de linha e adiciona ao conjunto
+            filtered_whitelist = {line.strip() for line in f}
+        print(f"Whitelist carregada com {len(filtered_whitelist)} compostos.")
+        return filtered_whitelist
+
+    # Se não existir, a função continua...
+    print("Arquivo de cache não encontrado. Gerando whitelist a partir das fontes de dados...")
+
+
     pubchem_syn_path = "./data/pubchem_data/CID-Synonym-filtered"
     pubchem_title_path = "./data/pubchem_data/CID-Title"
 
@@ -142,6 +156,17 @@ def get_therapeutic_compounds(normalized_target_disease: str, biomolecule_blackl
     
     print(f"Removidos {len(final_whitelist_set) - len(filtered_whitelist)} compostos genéricos da whitelist.")
     print(f"Whitelist final e filtrada contém {len(filtered_whitelist)} compostos.")
+
+    # Salva o conjunto final no arquivo de cache para uso futuro
+    print(f"Salvando whitelist gerada em: {cache_path}")
+    
+    # Garante que o diretório de dados exista antes de tentar salvar o arquivo
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+
+    with open(cache_path, 'w') as f:
+        # Salva em ordem alfabética para consistência
+        for compound in sorted(list(filtered_whitelist)):
+            f.write(f"{compound}\n")
     
     return filtered_whitelist
 
@@ -171,19 +196,14 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
     os.makedirs(compound_history_path, exist_ok=True)
 
     # Loads all compounds present in the corpus.
-    if os.path.exists(compound_list_path):
-        print('List of compounds in corpus already exists, loading it.')
-        with open(compound_list_path, 'r', encoding='utf-8') as f:
-            all_compounds_in_corpus = [line.strip() for line in f if line.strip()]
-    else:
-        print('Gathering all compounds mentioned in the corpus.')
-        all_compounds_in_corpus = get_therapeutic_compounds(normalized_target_disease)
-        if all_compounds_in_corpus:
-            print(f'Saving list of {len(all_compounds_in_corpus)} compounds to {compound_list_path}')
-            os.makedirs(os.path.dirname(compound_list_path), exist_ok=True)
-            with open(compound_list_path, 'w', encoding='utf-8') as f:
-                for compound in sorted(list(all_compounds_in_corpus)):
-                    f.write(f"{compound}\n")
+    print('Gathering all compounds mentioned in the corpus.')
+    all_compounds_in_corpus = get_therapeutic_compounds(normalized_target_disease)
+    #if all_compounds_in_corpus:
+    #    print(f'Saving list of {len(all_compounds_in_corpus)} compounds to {compound_list_path}')
+    #    os.makedirs(os.path.dirname(compound_list_path), exist_ok=True)
+    #    with open(compound_list_path, 'w', encoding='utf-8') as f:
+    #        for compound in sorted(list(all_compounds_in_corpus)):
+    #            f.write(f"{compound}\n")
 
     if not all_compounds_in_corpus:
         print(f"Could not load or generate compound list. Have you run step 4?")
@@ -299,4 +319,4 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
 
 
 if __name__ == '__main__':
-    generate_compound_dot_products_csv(get_normalized_target_disease)
+    generate_compound_dot_products_csv(get_normalized_target_disease())
