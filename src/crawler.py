@@ -40,8 +40,6 @@ def search(query: str, entrez_email: str, retmax_papers: str, start_year: int, e
     date_filter = f"AND ((\"{start_year}/01/01\"[Date - Publication] : \"{end_year}/12/31\"[Date - Publication]))"
     final_query = f'({query} AND English[Language]) {date_filter}'
 
-    print(f"Executing PubMed Query: {final_query}")
-
     Entrez.email = entrez_email
     handle = Entrez.esearch(db='pubmed',
                             sort='relevance',
@@ -71,6 +69,62 @@ def fetch_details(paper_ids: list, entrez_email: str):
     handle.close()
     return found
 
+def get_synonyms_for_terms(terms: list):
+    """
+    Expands a list of terms to include their synonyms from PubChem data.
+    Args:
+        terms (list): A list of terms to find synonyms for.
+
+    Returns:
+        list: A list containing the original terms and all their found synonyms.
+    """
+    print("Reading PubChem data to find synonyms...")
+    # Paths to the PubChem data files
+    titles_path = 'data/pubchem_data/CID-Title'
+    synonyms_path = 'data/pubchem_data/CID-Synonym-filtered'
+
+    # 1. Read CID-Title and create a mapping from lowercase title to CID
+    title_to_cid = {}
+    try:
+        with open(titles_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split('	')
+                if len(parts) == 2:
+                    cid, title = parts
+                    title_to_cid[title.lower()] = cid
+    except FileNotFoundError:
+        print(f"Warning: Title file not found at {titles_path}")
+        return terms  # Return original terms if data is missing
+
+    # 2. Read CID-Synonym-filtered and create a mapping from CID to synonyms
+    cid_to_synonyms = {}
+    try:
+        with open(synonyms_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split('	')
+                if len(parts) == 2:
+                    cid, synonym = parts
+                    if cid not in cid_to_synonyms:
+                        cid_to_synonyms[cid] = []
+                    cid_to_synonyms[cid].append(synonym)
+    except FileNotFoundError:
+        print(f"Warning: Synonym file not found at {synonyms_path}")
+        return terms  # Return original terms if data is missing
+
+    # 3. Expand the initial list of terms with synonyms
+    expanded_terms = set(terms)
+    for term in terms:
+        # The terms in topics_of_interest.txt are expected to be lowercase canonical names
+        cid = title_to_cid.get(term.lower())
+        if cid:
+            synonyms = cid_to_synonyms.get(cid, [])
+            for s in synonyms:
+                expanded_terms.add(s)
+
+    print(f"Expanded {len(terms)} terms to {len(expanded_terms)} with synonyms.")
+    return list(expanded_terms)
+
+
 def generate_query(disease, normalized_target_disease):
     """
     Generates a generalized PubMed search query from a file of topics.
@@ -91,6 +145,7 @@ def generate_query(disease, normalized_target_disease):
             f.write(disease + '\n')
     
     topics = list_from_file(topics_file)
+    if len(topics) > 1: topics = get_synonyms_for_terms(topics)
     sub_queries = [f'("{topic}"[Title/Abstract] OR "{topic}"[MeSH Terms])' for topic in topics]
     query = " OR ".join(sub_queries)
     return f'({query})'
@@ -140,13 +195,13 @@ def run_pubmed_crawler(target_disease: str, normalized_target_disease: str,
     # Looks for papers matching the query and stores their IDs in a list.
     search_results = search(query, entrez_email, retmax_papers, start_year, end_year)
     new_paper_id_list = list(search_results['IdList'])
-    # Keeps only the IDs that are not already in the set of old papers.!
+    # Keeps only the IDs that are not already in the set of old papers.
     new_paper_id_list = [x for x in new_paper_id_list if x not in downloaded_paper_ids]
 
     # If nothing new was found, exits the program. All papers matching the query were already downloaded.
     if not new_paper_id_list:
         print('No new papers found\n')
-        return
+        return 0
 
     print(f'{len(new_paper_id_list)} papers found\n')
 
@@ -195,9 +250,11 @@ def run_pubmed_crawler(target_disease: str, normalized_target_disease: str,
 
     # Updates the list of downloaded papers with the new ones.
     with open(downloaded_paper_ids_path, 'a+', encoding='utf-8') as file:
-        for new_id in new_paper_id_list: file.write('\n' + str(new_id))
+        for new_id in new_paper_id_list: file.write(str(new_id) + '\n')
 
     print(f'Crawler finished with {len(old_papers) + paper_counter} papers collected.')
+
+    return paper_counter + len(old_papers)
 
 if __name__ == '__main__':
     run_pubmed_crawler(get_target_disease(), get_normalized_target_disease())

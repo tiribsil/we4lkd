@@ -54,14 +54,18 @@ def dataframes_from_txt(summaries_path, nature_filtered_words: list = None):
             F.lit(True)
         )
 
-        df = ss().read \
+        df_raw = ss().read \
             .option('header', 'false') \
             .option('lineSep', '\n') \
             .option('sep', '|') \
             .option('quote', '') \
-            .csv(file_path) \
-            .withColumnRenamed('_c0', 'title') \
-            .withColumnRenamed('_c1', 'summary') \
+            .csv(file_path)
+
+        if df_raw.rdd.isEmpty():
+            print(f"Warning: File contains no data after reading: {Path(file_path).name}. Skipping.")
+            continue
+
+        df = df_raw.toDF('title', 'summary') \
             .withColumn('year', F.lit(year_of_file)) \
             .where(F.col('title').isNotNull() & F.col('summary').isNotNull()) \
             .where(title_doesnt_have_nature_filtered_words)

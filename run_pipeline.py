@@ -9,7 +9,7 @@ sys.path.append(str(Path.cwd()))
 
 from src.utils import get_target_disease, get_normalized_target_disease, set_target_disease
 from src.crawler import run_pubmed_crawler
-from src.merge_txt import aggregate_abstracts_from_year
+from src.merge_txt import aggregate_abstracts_by_year
 from src.ner_table_generator import generate_ner_table
 from src.clean_summaries import clean_and_normalize_abstracts
 from src.train_yoy import train_word_embedding_models
@@ -90,7 +90,7 @@ def main_pipeline():
         # Step 1: Crawl PubMed for abstracts up to the current year.
         print("\n--- Step 1: Running PubMed Crawler ---")
         # We pass the date range to the crawler function.
-        run_pubmed_crawler(
+        n_papers = run_pubmed_crawler(
             target_disease=target_disease,
             normalized_target_disease=normalized_target_disease,
             start_year=start_year,
@@ -99,11 +99,12 @@ def main_pipeline():
 
         # Step 2: Aggregate abstracts into files from year.
         print("\n--- Step 2: Aggregating Abstracts ---")
-        aggregate_abstracts_from_year(normalized_target_disease, current_year)
+        aggregate_abstracts_by_year(normalized_target_disease, start_year, current_year)
 
         # Step 3: Generate NER table from the latest aggregated file.
         print("\n--- Step 3: Generating NER Table ---")
-        generate_ner_table(target_disease, normalized_target_disease)
+        generated_table = generate_ner_table(target_disease, normalized_target_disease)
+        if not generated_table: continue
 
         # Step 4: Clean and normalize the abstracts.
         print("\n--- Step 4: Cleaning and Normalizing Abstracts ---")
@@ -126,8 +127,8 @@ def main_pipeline():
         get_best_treatment_candidates()
 
         # Step 9: Backfeed the results into the topics of interest for the next iteration.
-        print("\n--- Step 9: Feedback Loop for New Topics ---")
-        feedback_new_topics(normalized_target_disease)
+        #print("\n--- Step 9: Feedback Loop for New Topics ---")
+        #feedback_new_topics(normalized_target_disease)
 
     print(f"\n--- Pipeline finished successfully for {target_disease} up to year {end_year} ---")
 

@@ -84,6 +84,9 @@ def generate_historical_plots(csv_files_to_plot, target_disease, column_to_plot,
         str: A string containing the TikZ code for the plots.
     """
 
+    print('Skipping generate_historical_plots for now...')
+    return
+
     all_plots_data = []
     for file_path in csv_files_to_plot:
         df = pd.read_csv(file_path)
@@ -156,6 +159,8 @@ def generate_latent_knowledge_report(target_disease: str, normalized_target_dise
     """
     target_disease = get_target_disease()
     normalized_target_disease = get_normalized_target_disease()
+    os.makedirs(f'./data/{normalized_target_disease}/validation/w2v/top_n_compounds/', exist_ok=True)
+    os.makedirs(f'./data/{normalized_target_disease}/validation/ft/top_n_compounds/', exist_ok=True)
 
     pd.options.mode.chained_assignment = None
 

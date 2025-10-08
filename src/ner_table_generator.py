@@ -111,7 +111,7 @@ def generate_ner_table(target_disease: str, normalized_target_disease: str, spac
     # Loads the spaCy NER model.
     nlp = load_spacy_model(spacy_model_name)
     if nlp is None:
-        return
+        return False
 
     Path(f"./data/{normalized_target_disease}").mkdir(parents=True, exist_ok=True)
 
@@ -120,7 +120,7 @@ def generate_ner_table(target_disease: str, normalized_target_disease: str, spac
     ner_data = process_abstracts_from_file(nlp, normalized_target_disease, relevant_spacy_entity_types, mapped_entity_type, batch_size)
     if not ner_data:
         print(f"Aggregated abstracts not found. Have you run step 2?")
-        return
+        return False
 
     # Creates a DataFrame from the NER data and removes duplicates.
     ner_df = pd.DataFrame(ner_data).drop_duplicates().reset_index(drop=True)
@@ -130,6 +130,8 @@ def generate_ner_table(target_disease: str, normalized_target_disease: str, spac
 
     ner_df.to_csv(output_ner_csv_path, index=False)
     print(f"NER table saved at {output_ner_csv_path}.")
+
+    return True
 
 
 if __name__ == '__main__':
