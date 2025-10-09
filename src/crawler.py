@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 # This makes sure the script runs from the root of the project, so relative paths work correctly.
@@ -24,7 +25,7 @@ def list_from_file(file_path):
     except FileNotFoundError: pass
     return strings_list
 
-def search(query: str, entrez_email: str, retmax_papers: str, start_year: int, end_year: int):
+def search(query: str, entrez_email: str, retmax_papers: str, start_year: int, end_year: int, retstart: int = 0):
     """
     Searches for papers in PubMed using the provided query within a date range.
     Args:
@@ -33,6 +34,7 @@ def search(query: str, entrez_email: str, retmax_papers: str, start_year: int, e
         retmax_papers (str): Maximum number of papers to retrieve from PubMed.
         start_year (int): The starting year for the publication date range.
         end_year (int): The ending year for the publication date range.
+        retstart (int): The starting index of the results to retrieve.
 
     Returns:
         found: A dictionary containing the search results.
@@ -44,6 +46,7 @@ def search(query: str, entrez_email: str, retmax_papers: str, start_year: int, e
     handle = Entrez.esearch(db='pubmed',
                             sort='relevance',
                             retmax=retmax_papers,
+                            retstart=retstart,
                             retmode='xml',
                             term=final_query)
     found = Entrez.read(handle)
@@ -153,7 +156,7 @@ def generate_query(disease, normalized_target_disease):
 def run_pubmed_crawler(target_disease: str, normalized_target_disease: str,
                        start_year: int, end_year: int,
                        entrez_email: str = 'tirs@estudante.ufscar.br',
-                       retmax_papers: str = '999999'):
+                       retmax_papers: str = '9998'):
     """
     Fetches and saves PubMed papers related to a target disease for a specific year range.
 
@@ -193,8 +196,18 @@ def run_pubmed_crawler(target_disease: str, normalized_target_disease: str,
     print(f'Searching for papers...')
 
     # Looks for papers matching the query and stores their IDs in a list.
-    search_results = search(query, entrez_email, retmax_papers, start_year, end_year)
-    new_paper_id_list = list(search_results['IdList'])
+    all_new_paper_ids = []
+    start_index = 0
+    while True:
+        search_results = search(query, entrez_email, retmax_papers, start_year, end_year, retstart=start_index)
+        batch_ids = list(search_results['IdList'])
+        if not batch_ids:
+            break  # No more papers found
+        all_new_paper_ids.extend(batch_ids)
+        start_index += len(batch_ids)
+        time.sleep(1)  # Be respectful to the API
+
+    new_paper_id_list = list(set(all_new_paper_ids))
     # Keeps only the IDs that are not already in the set of old papers.
     new_paper_id_list = [x for x in new_paper_id_list if x not in downloaded_paper_ids]
 

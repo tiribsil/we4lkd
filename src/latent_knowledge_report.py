@@ -10,7 +10,7 @@ from tikzplotlib import get_tikz_code
 
 from src.utils import *
 
-def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combination, metric, year, top_n=20):
+def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combination, metric, year, top_n=20, delta_threshold=0.001):
     """
     Goes through the compounds' history and selects the top N compounds for a given year using a given metric.
     Args:
@@ -20,7 +20,8 @@ def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combi
         metric: One of the metrics in the compounds' history.
         year: The specific year to analyze the compounds' history.
         top_n: How many of the best compounds to select.
-
+        delta_threshold: The threshold for the delta_normalized_dot_product metric.
+    
     Returns:
         list: A list of file paths for the top N compounds' history for the given year.
     """
@@ -58,6 +59,11 @@ def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combi
 
     # Selects the top N scores for the year.
     top_scores = scores_for_year[:top_n]
+
+    if metric == 'delta_normalized_dot_product':
+        top_scores = [s for s in top_scores if s[0] > delta_threshold]
+
+    print(top_scores)
 
     # Saves the list as a CSV file in the corresponding year folder.
     output_dir = f'./data/{normalized_target_disease}/validation/{model_type}/top_n_compounds/{year}/'
@@ -141,7 +147,7 @@ def generate_historical_plots(csv_files_to_plot, target_disease, column_to_plot,
     return latex_string
 
 
-def generate_latent_knowledge_report(target_disease: str, normalized_target_disease: str, metrics_to_plot: list = None, w2v_combination: str = '15', ft_combination: str = '16', top_n_compounds: int = 20):
+def generate_latent_knowledge_report(target_disease: str, normalized_target_disease: str, metrics_to_plot: list = None, w2v_combination: str = '15', ft_combination: str = '16', top_n_compounds: int = 20, delta_threshold: float = 0.001):
     """
     Generates a LaTeX report with historical plots of compound-disease relationships.
 
@@ -153,6 +159,7 @@ def generate_latent_knowledge_report(target_disease: str, normalized_target_dise
         w2v_combination (str): The parameter combination identifier for Word2Vec models. Defaults to '15'.
         ft_combination (str): The parameter combination identifier for FastText models. Defaults to '16'.
         top_n_compounds (int): The number of top compounds to select for plotting each year. Defaults to 20.
+        delta_threshold (float): The threshold for the delta_normalized_dot_product metric. Defaults to 0.001.
         latex_template_path (str): The path to the Jinja2 LaTeX template file. Defaults to './data/latent_knowledge_template.tex'.
         output_report_dir (str): The directory where the generated LaTeX report will be saved.
                                  If None, it will be constructed using normalized_target_disease.
@@ -185,7 +192,8 @@ def generate_latent_knowledge_report(target_disease: str, normalized_target_dise
                 combination='15',
                 metric=metric,
                 year=year,
-                top_n=20
+                top_n=20,
+                delta_threshold=delta_threshold
             )
 
             if year == end_year:
@@ -211,7 +219,8 @@ def generate_latent_knowledge_report(target_disease: str, normalized_target_dise
                 combination='16',
                 metric=metric,
                 year=year,
-                top_n=20
+                top_n=20,
+                delta_threshold=delta_threshold
             )
 
             if year == end_year:

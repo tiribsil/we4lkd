@@ -80,7 +80,7 @@ def main_pipeline():
     print(f"--- Starting Pipeline for: {target_disease} ---")
 
     # The start year can be configured here.
-    start_year = 1970
+    start_year = 1960
     end_year = datetime.now().year
 
     # --- Pipeline Execution Loop ---
@@ -99,7 +99,8 @@ def main_pipeline():
 
         # Step 2: Aggregate abstracts into files from year.
         print("\n--- Step 2: Aggregating Abstracts ---")
-        aggregate_abstracts_by_year(normalized_target_disease, start_year, current_year)
+        aggregated_abstracts = aggregate_abstracts_by_year(normalized_target_disease, start_year, current_year)
+        if not aggregated_abstracts: continue
 
         # Step 3: Generate NER table from the latest aggregated file.
         print("\n--- Step 3: Generating NER Table ---")
@@ -127,8 +128,8 @@ def main_pipeline():
         get_best_treatment_candidates()
 
         # Step 9: Backfeed the results into the topics of interest for the next iteration.
-        #print("\n--- Step 9: Feedback Loop for New Topics ---")
-        #feedback_new_topics(normalized_target_disease)
+        print("\n--- Step 9: Feedback Loop for New Topics ---")
+        feedback_new_topics(normalized_target_disease)
 
     print(f"\n--- Pipeline finished successfully for {target_disease} up to year {end_year} ---")
 

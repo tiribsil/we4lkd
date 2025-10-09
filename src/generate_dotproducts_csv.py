@@ -198,12 +198,6 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
     # Loads all compounds present in the corpus.
     print('Gathering all compounds mentioned in the corpus.')
     all_compounds_in_corpus = get_therapeutic_compounds(normalized_target_disease)
-    #if all_compounds_in_corpus:
-    #    print(f'Saving list of {len(all_compounds_in_corpus)} compounds to {compound_list_path}')
-    #    os.makedirs(os.path.dirname(compound_list_path), exist_ok=True)
-    #    with open(compound_list_path, 'w', encoding='utf-8') as f:
-    #        for compound in sorted(list(all_compounds_in_corpus)):
-    #            f.write(f"{compound}\n")
 
     if not all_compounds_in_corpus:
         print(f"Could not load or generate compound list. Have you run step 4?")
@@ -218,6 +212,22 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
     if not models:
         print('No models found. Have you run step 5 with the same model type?')
         return
+
+    # Filters the list of compounds to include only those that are present in the final model's vocabulary.
+    start_year, end_year = get_corpus_year_range(normalized_target_disease)
+    final_model_path = f'{model_directory_path}/model_{start_year}_{end_year}.model'
+    if os.path.exists(final_model_path):
+        if model_type == 'w2v': final_model = Word2Vec.load(final_model_path)
+        else: final_model = FastText.load(final_model_path)
+        
+        compounds_in_model_vocab = [compound for compound in all_compounds_in_corpus if compound in final_model.wv.key_to_index]
+        
+        print(f"Original compound list size: {len(all_compounds_in_corpus)}")
+        print(f"Filtered compound list size (in model vocab): {len(compounds_in_model_vocab)}")
+        
+        all_compounds_in_corpus = compounds_in_model_vocab
+    else:
+        print(f"Final model not found at {final_model_path}. Skipping vocabulary filtering.")
 
     # Initializes a dictionary to store various metrics for each compound.
     # Each metric is a way to measure the relationship between the compound and the target disease. TODO add a delta variation of each metric.
@@ -258,11 +268,12 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
 
         # Tries to get the embedding of each compound.
         for compound in all_compounds_in_corpus:
-            print(f'Accessing the output embedding of {compound}.')
+            #print(f'Accessing the output embedding of {compound}.')
             compound_we = get_embedding_of_word(compound, model, method='da')
             if compound_we is None:
                 # This should not happen in the last model, as all compounds were validated against the corpus.
-                print(f"Compound '{compound}' not found in the model's vocabulary.")
+                if current_year == end_year: 
+                    print(f"Compound '{compound}' not found in the model's vocabulary even though it is mentioned in the corpus.")
                 continue
 
             # Computes the dot product and the Euclidean distance between the compound's embedding and the target disease's embedding.
@@ -303,7 +314,7 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
         # Computes the delta normalized dot product, which is the difference between the current and previous normalized dot product.
         # This metric shows the change in the relationship between the compound and the target disease over time.
         if normalized_values:
-            delta_values = np.diff(np.array(normalized_values), prepend=0.0).tolist()
+            delta_values = np.diff(np.array(normalized_values), prepend=normalized_values[0]).tolist()
             dictionary_for_all_compounds[key]['delta_normalized_dot_product'] = delta_values
         else:
             dictionary_for_all_compounds[key]['delta_normalized_dot_product'] = []

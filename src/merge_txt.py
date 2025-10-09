@@ -22,7 +22,7 @@ def aggregate_abstracts_by_year(normalized_target_disease: str, start_year: int,
     filenames = sorted(list(map(str, Path(source_path).glob('*.txt'))))
     if not filenames:
         print('No files found in raw_abstracts directory. Have you run the crawler first?')
-        return
+        return False
 
     # Update results file for each year from start_year to end_year
     for year in range(start_year, end_year + 1):
@@ -48,6 +48,7 @@ def aggregate_abstracts_by_year(normalized_target_disease: str, start_year: int,
                 f_out.write(f"{title}|{content}\n")
     
     print(f'Full corpus saved to {full_corpus_file}')
+    return True
 
 if __name__ == '__main__':
     start_y = input('Aggregate files from which year?')

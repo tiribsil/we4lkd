@@ -37,7 +37,7 @@ def main():
         current_year = int(year_dir.name)
         compounds_this_year = set()
 
-        for file_path in year_dir.glob('*'):
+        for file_path in year_dir.glob('*delta_normalized_dot_product.csv'):
             if not file_path.is_file():
                 continue
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
