@@ -6,7 +6,7 @@ from gensim.models import Word2Vec, FastText
 import pandas as pd
 from src.utils import *
 
-def train_word_embedding_models(normalized_target_disease: str, start_year: int, current_year: int, model_type: str = 'w2v', parameters_combination: list = None, min_count: int = 5, sg: int = 1, hs: int = 0, epochs: int = 15, min_corpus_size: int = 10):
+def train_word_embedding_models(normalized_target_disease: str, start_year: int, current_year: int, model_type: str = 'w2v', parameters_combination: list = None, min_count: int = 2, sg: int = 1, hs: int = 0, epochs: int = 15, min_corpus_size: int = 10):
     """
     Trains Word2Vec or FastText models year-over-year based on cleaned abstracts.
 

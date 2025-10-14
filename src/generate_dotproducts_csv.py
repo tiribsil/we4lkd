@@ -148,7 +148,7 @@ def get_therapeutic_compounds(normalized_target_disease: str, biomolecule_blackl
             'cholesterol', 'histamine', 'folicacid', 'cholecalciferol', 'retinoicacid', 'nicotinicacid', 'alpha-tocopherol',
             'lithium', 'magnesium', 'oxygen', 'nitrogen', 'platinum', 'hydrogenperoxide', 'radium', 'potassium',
             'agar', 'hemin', 'phorbol12-myristate13-acetate', 'methylcellulose(4000cps)',
-            'insulin', 'triphosphate', 'histaminedihydrochloride', 'water'
+            'insulin', 'triphosphate', 'histaminedihydrochloride', 'water', 'carbon'
     }
 
     # Filtra a whitelist final removendo os itens da blacklist
@@ -240,6 +240,7 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
                 'normalized_dot_product': [],
                 'delta_normalized_dot_product': [],
                 'euclidian_distance': [],
+                'score': [],
             }
         }
         )
@@ -277,14 +278,23 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
                 continue
 
             # Computes the dot product and the Euclidean distance between the compound's embedding and the target disease's embedding.
-            dot_product = np.dot(compound_we, target_disease_embedding).item()
-            euclidean_distance = np.linalg.norm(compound_we - target_disease_embedding).item()
+            dot_product = np.dot(compound_we, target_disease_embedding)
+            euclidean_distance = np.linalg.norm(compound_we - target_disease_embedding)
+
+            # Normalizes the dot product by using the cosine similarity.
+            # This is a more stable metric that is not dependent on the maximum value of the entire time series.
+            norm_compound = np.linalg.norm(compound_we)
+            norm_disease = np.linalg.norm(target_disease_embedding)
+            if norm_compound > 0 and norm_disease > 0:
+                normalized_dot_product = (dot_product / (norm_compound * norm_disease)).item()
+            else:
+                normalized_dot_product = 0.0
 
             # Fills out the corresponding dictionary entry with the results.
             dictionary_for_all_compounds[f'{compound}_comb{combination}']['year'].append(current_year)
-            dictionary_for_all_compounds[f'{compound}_comb{combination}']['dot_product'].append(dot_product)
-            dictionary_for_all_compounds[f'{compound}_comb{combination}']['euclidian_distance'].append(euclidean_distance)
-
+            dictionary_for_all_compounds[f'{compound}_comb{combination}']['dot_product'].append(dot_product.item())
+            dictionary_for_all_compounds[f'{compound}_comb{combination}']['normalized_dot_product'].append(normalized_dot_product)
+            dictionary_for_all_compounds[f'{compound}_comb{combination}']['euclidian_distance'].append(euclidean_distance.item())
 
     print('Generating historical record for each compound...')
     for c in all_compounds_in_corpus:
@@ -301,28 +311,32 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
             # print(f"Aviso: Lista de dados para '{key}' está vazia. Pulando cálculos.")
             continue
 
-        # Gets the normalized dot products and stores them in the dictionary.
-        maximum = np.max(dot_products)
-        if maximum > 0:
-            normalized_values = [x / maximum for x in dot_products]
-            dictionary_for_all_compounds[key]['normalized_dot_product'] = normalized_values
-        else:
-            # Should not happen, but this prevents division by zero.
-            normalized_values = [0.0] * len(dot_products)
-            dictionary_for_all_compounds[key]['normalized_dot_product'] = normalized_values
+        # The normalized_dot_product is now calculated as cosine similarity inside the year loop.
+        normalized_values = np.array(dictionary_for_all_compounds[key]['normalized_dot_product'])
 
         # Computes the delta normalized dot product, which is the difference between the current and previous normalized dot product.
         # This metric shows the change in the relationship between the compound and the target disease over time.
-        if normalized_values:
-            delta_values = np.diff(np.array(normalized_values), prepend=normalized_values[0]).tolist()
-            dictionary_for_all_compounds[key]['delta_normalized_dot_product'] = delta_values
+        if normalized_values.size > 0:
+            delta_values = np.diff(normalized_values, prepend=normalized_values[0])
+            dictionary_for_all_compounds[key]['delta_normalized_dot_product'] = delta_values.tolist()
         else:
+            delta_values = np.array([])
             dictionary_for_all_compounds[key]['delta_normalized_dot_product'] = []
+
+        euclidian_distances = np.array(dictionary_for_all_compounds[key]['euclidian_distance'])
+
+        # Computes a score to measure the overall closeness to the target disease
+        if normalized_values.size > 0:
+            score = normalized_values * (1 + delta_values) / (euclidian_distances + 1e-9)
+            dictionary_for_all_compounds[key]['score'] = score.tolist()
+        else:
+            dictionary_for_all_compounds[key]['score'] = []
+
 
         # Writes the compound entry in the dictionary to a CSV file.
         pd.DataFrame.from_dict(data=dictionary_for_all_compounds[key]).to_csv(
             f'{compound_history_path}/{key_filename}.csv',
-            columns=['year', 'normalized_dot_product', 'delta_normalized_dot_product', 'euclidian_distance'],
+            columns=['year', 'normalized_dot_product', 'delta_normalized_dot_product', 'euclidian_distance', 'score'],
             index=False
         )
 

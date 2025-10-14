@@ -120,3 +120,6 @@ Não deu muito certo, só idarubicin foi bom, primeira notificação em 1979. Vo
 Também não deu muito certo, resultados parecidos.
 
 Ideia da Luiza! Fazer os modelos serem incrementais, com a saída de um alimentando o crawler do próximo. Simula evolução do conhecimento.
+
+Modularizei os scripts e parametrizei pra poder mexer mais fácil depois. Tive problemas com a API do entrez mas foi só dividir em batches. Deixou MUITO lento então vou fazer threads. Backfeeding parece que começa a deixar o modelo pior depois de um tempo, preciso limitar o quanto a lista de tópicos aumenta.
+

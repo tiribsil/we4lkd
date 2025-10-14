@@ -60,10 +60,9 @@ def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combi
     # Selects the top N scores for the year.
     top_scores = scores_for_year[:top_n]
 
-    if metric == 'delta_normalized_dot_product':
-        top_scores = [s for s in top_scores if s[0] > delta_threshold]
-
-    print(top_scores)
+    #if metric == 'delta_normalized_dot_product':
+    #    top_scores = [s for s in top_scores if s[0] > delta_threshold]
+    #print(top_scores)
 
     # Saves the list as a CSV file in the corresponding year folder.
     output_dir = f'./data/{normalized_target_disease}/validation/{model_type}/top_n_compounds/{year}/'
@@ -174,7 +173,7 @@ def generate_latent_knowledge_report(target_disease: str, normalized_target_dise
     plots_data = {}
 
     if metrics_to_plot is None:
-        metrics_to_plot = ['normalized_dot_product', 'delta_normalized_dot_product', 'euclidian_distance']
+        metrics_to_plot = ['normalized_dot_product', 'delta_normalized_dot_product', 'euclidian_distance', 'score']
 
     start_year, end_year = get_corpus_year_range(normalized_target_disease)
     year_range = (start_year, end_year)

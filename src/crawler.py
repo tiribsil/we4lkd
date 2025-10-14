@@ -1,6 +1,8 @@
 import os
 import time
 from pathlib import Path
+import string
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # This makes sure the script runs from the root of the project, so relative paths work correctly.
 os.chdir(Path(__file__).resolve().parent.parent)
@@ -128,37 +130,60 @@ def get_synonyms_for_terms(terms: list):
     return list(expanded_terms)
 
 
-def generate_query(disease, normalized_target_disease):
+
+
+def search_year(topic, year, entrez_email, retmax_papers, base_delay=0.5, max_retries=5):
     """
-    Generates a generalized PubMed search query from a file of topics.
-    If the file doesn't exist, it creates it with the target disease.
-    For each topic, it searches in Title/Abstract and MeSH terms.
-    Args:
-        disease: The name of the disease.
-
-    Returns:
-        The generated PubMed search query.
+    Performs a PubMed search for a given topic and year, handling pagination and retries with exponential backoff.
     """
-
-    # TODO: fazer usar todos os sinônimos de cada termo em vez de simplesmente o termo
-
-    topics_file = f'./data/{normalized_target_disease}/topics_of_interest.txt'
-    if not os.path.exists(topics_file):
-        with open(topics_file, 'w', encoding='utf-8') as f:
-            f.write(disease + '\n')
+    print(f"Searching for topic '{topic}' in year {year}...")
+    query = f'("{topic}"[Title/Abstract] OR "{topic}"[MeSH Terms])'
+    query = query.encode('ascii', 'ignore').decode('ascii')
     
-    topics = list_from_file(topics_file)
-    if len(topics) > 1: topics = get_synonyms_for_terms(topics)
-    sub_queries = [f'("{topic}"[Title/Abstract] OR "{topic}"[MeSH Terms])' for topic in topics]
-    query = " OR ".join(sub_queries)
-    return f'({query})'
+    year_ids = set()
+    start_index = 0
+    current_delay = base_delay
+    retries = 0
+
+    while True:
+        try:
+            search_results = search(query, entrez_email, retmax_papers, year, year, retstart=start_index)
+            batch_ids = list(search_results['IdList'])
+            
+            if not batch_ids:
+                break
+            
+            year_ids.update(batch_ids)
+            start_index += len(batch_ids)
+
+            if start_index >= 10000:
+                print(f"Reached the 10,000 record limit for topic '{topic}' in year {year}.")
+                break
+            
+            time.sleep(base_delay) # Consistent delay between successful batches
+            current_delay = base_delay # Reset delay on success
+
+        except Exception as e:
+            if "HTTP Error 429" in str(e) and retries < max_retries:
+                retries += 1
+                current_delay *= 2  # Exponential backoff
+                print(f"HTTP Error 429: Too Many Requests for topic '{topic}' in year {year}. Retrying in {current_delay:.2f} seconds (attempt {retries}/{max_retries})...")
+                time.sleep(current_delay)
+            else:
+                print(f"An unrecoverable error occurred during search for topic '{topic}' in year {year}: {e}")
+                break
+    return year_ids
+
 
 def run_pubmed_crawler(target_disease: str, normalized_target_disease: str,
                        start_year: int, end_year: int,
                        entrez_email: str = 'tirs@estudante.ufscar.br',
-                       retmax_papers: str = '9998'):
+                       retmax_papers: str = '9999', expand_synonyms: bool = False):
     """
     Fetches and saves PubMed papers related to a target disease for a specific year range.
+    This function iterates through a list of topics, and for each topic, it searches PubMed
+    year by year to retrieve a comprehensive set of papers, bypassing the 9,999 record limit
+    for a single query.
 
     Args:
         target_disease (str): The name of the disease to search for.
@@ -166,108 +191,117 @@ def run_pubmed_crawler(target_disease: str, normalized_target_disease: str,
         start_year (int): The start year of the search range.
         end_year (int): The end year of the search range.
         entrez_email (str): Email address for Entrez API.
-        retmax_papers (str): Maximum number of papers to retrieve from PubMed.
+        retmax_papers (str): Maximum number of papers to retrieve per API request.
     """
-    # This is for the final version of the program. For now, we will use a hardcoded target disease as it's easier to test.
-    # target_disease = input('Enter a target disease: ')
-    # normalized_target_disease = get_normalized_target_disease()
-
     set_target_disease(target_disease)
     print(f'Target disease: {target_disease}')
 
     raw_abstracts_path = f'./data/{normalized_target_disease}/corpus/raw_abstracts'
     downloaded_paper_ids_path = f'./data/{normalized_target_disease}/corpus/ids.txt'
+    topics_file = f'./data/{normalized_target_disease}/topics_of_interest.txt'
 
     os.makedirs(raw_abstracts_path, exist_ok=True)
 
-    # Generates a query to find relevant papers about the target disease.
-    query = generate_query(target_disease, normalized_target_disease)
-    print(f'Query: {query}')
-    paper_counter = 0
+    # Create topics file if it doesn't exist
+    if not os.path.exists(topics_file):
+        with open(topics_file, 'w', encoding='utf-8') as f:
+            f.write(target_disease + '\n')
 
-    # From now on, everything will be tied to the target disease, being stored in a folder named after it inside the ./data folder.
-
-    # Creates a list of IDs of already downloaded papers so we don't download them again.
+    # Get topics and expand with synonyms
+    topics = list_from_file(topics_file)
+    if len(topics) > 1 and expand_synonyms:
+        topics = get_synonyms_for_terms(topics)
+    
+    # Load IDs of already downloaded papers
     old_papers = list_from_file(downloaded_paper_ids_path)
     downloaded_paper_ids = set(old_papers)
 
-    # Normalizes query to avoid issues with special characters.
-    query = query.encode('ascii', 'ignore').decode('ascii')
-    print(f'Searching for papers...')
+    all_new_paper_ids = set()
 
-    # Looks for papers matching the query and stores their IDs in a list.
-    all_new_paper_ids = []
-    start_index = 0
-    while True:
-        search_results = search(query, entrez_email, retmax_papers, start_year, end_year, retstart=start_index)
-        batch_ids = list(search_results['IdList'])
-        if not batch_ids:
-            break  # No more papers found
-        all_new_paper_ids.extend(batch_ids)
-        start_index += len(batch_ids)
-        time.sleep(1)  # Be respectful to the API
+    # Use a ThreadPoolExecutor to parallelize the searches by year
+    for topic in topics:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_year = {executor.submit(search_year, topic, year, entrez_email, retmax_papers): year for year in range(start_year, end_year + 1)}
+            for future in as_completed(future_to_year):
+                year = future_to_year[future]
+                try:
+                    year_ids = future.result()
+                    all_new_paper_ids.update(year_ids)
+                except Exception as exc:
+                    print(f'{year} generated an exception: {exc}')
 
-    new_paper_id_list = list(set(all_new_paper_ids))
-    # Keeps only the IDs that are not already in the set of old papers.
-    new_paper_id_list = [x for x in new_paper_id_list if x not in downloaded_paper_ids]
 
-    # If nothing new was found, exits the program. All papers matching the query were already downloaded.
+    # Filter out already downloaded papers
+    new_paper_id_list = list(all_new_paper_ids - downloaded_paper_ids)
+
     if not new_paper_id_list:
         print('No new papers found\n')
         return 0
 
-    print(f'{len(new_paper_id_list)} papers found\n')
+    print(f'\nFound {len(new_paper_id_list)} new papers in total.\n')
+    paper_counter = 0
 
-    # Fetches the details of the new papers.
-    papers = fetch_details(new_paper_id_list, entrez_email)
-
-    # For each paper found...
-    for paper in papers['PubmedArticle']:
-        article_year = ''
-        article_abstract = ''
-
-        # If the paper doesn't have basic information, goes to the next one.
+    # Fetch details in batches to avoid overly long query strings
+    batch_size = 200
+    for i in range(0, len(new_paper_id_list), batch_size):
+        batch_ids = new_paper_id_list[i:i+batch_size]
+        print(f"Fetching details for batch {i//batch_size + 1}...")
         try:
-            article_title = paper['MedlineCitation']['Article']['ArticleTitle']
-            article_title_filename = article_title.lower().translate(
-                str.maketrans('', '', string.punctuation)).replace(' ', '_')
-        except KeyError: continue
+            papers = fetch_details(batch_ids, entrez_email)
+        except Exception as e:
+            print(f"Error fetching details for batch. Skipping. Error: {e}")
+            continue
 
-        # If the paper has no abstract, skips it.
-        try:
-            article_abstract = ' '.join(paper['MedlineCitation']['Article']['Abstract']['AbstractText'])
-            article_year = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate']['Year']
-        except KeyError as e:
-            if 'Abstract' in e.args: continue
-            if 'Year' in e.args:
-                article_year = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate'][
-                                   'MedlineDate'][0:4]
+        for paper in papers['PubmedArticle']:
+            article_year = ''
+            article_abstract = ''
 
-        # If the paper doesn't have a valid year, skips it.
-        if len(article_year) != 4: continue
+            try:
+                article_title = paper['MedlineCitation']['Article']['ArticleTitle']
+                article_title_filename = article_title.lower().translate(
+                    str.maketrans('', '', string.punctuation)).replace(' ', '_')
+            except KeyError:
+                continue
 
-        # The filename will be the year and the title of the article.
-        # This is the file in which the raw abstract will be saved.
-        filename = f'{article_year}_{article_title_filename}'
-        if len(filename) > 150: filename = filename[0:146]
+            try:
+                article_abstract = ' '.join(paper['MedlineCitation']['Article']['Abstract']['AbstractText'])
+                article_year = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate']['Year']
+            except KeyError as e:
+                if 'Abstract' in e.args:
+                    continue
+                try:
+                    # Try to get year from MedlineDate if PubDate is incomplete
+                    article_year = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate']['MedlineDate'].split(' ')[0]
+                except KeyError:
+                    continue # Skip if no year is found
 
-        # Sets up the destination directory.
-        path_name = f'{raw_abstracts_path}/{filename}.txt'
-        path_name = path_name.encode('ascii', 'ignore').decode('ascii')
+            if not article_year or not article_year.isdigit() or len(article_year) != 4:
+                continue
 
-        # Writes the file with the paper title and abstract.
-        with open(path_name, "a", encoding='utf-8') as file:
-            file.write(article_title + ' ' + article_abstract)
+            filename = f'{article_year}_{article_title_filename}'
+            if len(filename) > 150:
+                filename = filename[:146]
 
-        paper_counter += 1
+            path_name = f'{raw_abstracts_path}/{filename}.txt'
+            path_name = path_name.encode('ascii', 'ignore').decode('ascii')
 
-    # Updates the list of downloaded papers with the new ones.
+            with open(path_name, "w", encoding='utf-8') as file:
+                file.write(article_title + ' ' + article_abstract)
+
+            paper_counter += 1
+        
+        time.sleep(0.5)
+
+
+    # Update the list of downloaded papers with the new ones.
     with open(downloaded_paper_ids_path, 'a+', encoding='utf-8') as file:
-        for new_id in new_paper_id_list: file.write(str(new_id) + '\n')
+        for new_id in new_paper_id_list:
+            file.write(str(new_id) + '\n')
 
-    print(f'Crawler finished with {len(old_papers) + paper_counter} papers collected.')
+    print(f'Crawler finished. {paper_counter} new papers collected.')
+    print(f'Total papers in corpus: {len(downloaded_paper_ids) + paper_counter}')
 
-    return paper_counter + len(old_papers)
+    return paper_counter
 
 if __name__ == '__main__':
     run_pubmed_crawler(get_target_disease(), get_normalized_target_disease())
