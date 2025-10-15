@@ -47,39 +47,43 @@ The final output is an explainable report that provides context and evidence, he
 
 This project is structured as a sequential pipeline, in which each script performs a specific task and prepares data for the next step.
 
-1.  **`1_crawler.py` - PubMed Crawler**:
+1.  **`crawler.py` - PubMed Crawler**:
     -   Takes a user-defined disease as input.
     -   Uses a topics of interest file to fetch queries not only related to the disease, but everything else in it.
     -   Fetches the IDs and abstracts of all relevant papers and saves them as individual text files.
 
-2.  **`2_merge_txt.py` - Corpus Aggregator**:
+2.  **`merge_txt.py` - Corpus Aggregator**:
     -   Merges the individual abstract files into cumulative, year-over-year corpus files. For example, the file for 1995 contains all abstracts from the start year up to and including 1995.
 
-3.  **`3_ner_table_generator.py` - NER Table Generator**:
+3.  **`ner_table_generator.py` - NER Table Generator**:
     -   Processes the full corpus using a spaCy biomedical NER model.
     -   Identifies all entities labeled as `CHEMICAL` and saves them to a `ner_table.csv` for later use in normalization.
 
-4.  **`4_clean_summaries.py` - Text Preprocessing**:
+4.  **`clean_summaries.py` - Text Preprocessing**:
     -   A PySpark job that performs heavy-duty text cleaning.
     -   It normalizes text, removes stopwords, and crucially, uses a PubChem synonym database and the NER table to replace compound synonyms with a canonical name.
     -   Outputs a single `clean_abstracts.csv` file.
 
-5.  **`5_train_yoy.py` - Year-Over-Year Model Training**:
+5.  **`train_yoy.py` - Year-Over-Year Model Training**:
     -   Iterates through each year of the study period.
     -   For each year, it trains a Word2Vec (or FastText) model on the corresponding cumulative corpus of cleaned abstracts.
 
-6.  **`6_generate_dotproducts_csv.py` - Relationship Scoring**:
+6.  **`generate_dotproducts_csv.py` - Relationship Scoring**:
     -   Loads each year-over-year model.
     -   Calculates the dot product (a proxy for semantic similarity) between the vector for the target disease and the vectors for all chemical compounds present in corpus.
     -   Saves the historical scores for each compound in a separate CSV file.
 
-7.  **`7_latent_knowledge_report.py` - Report Generation**:
+7.  **`latent_knowledge_report.py` - Report Data Generation**:
     -   Analyzes the historical score data for all compounds.
-    -   For each year, it ranks the compounds based on their relationship score with the disease.
-    -   It then generates plots showing the score evolution for the top-ranked compounds from the final year.
-    -   These plots are embedded into a LaTeX template (`latent_knowledge_template.tex`) to create a final PDF report.
+    -   For each year, it ranks the compounds based on their relationship score with the disease and saves the top compounds to a file.
+    -   This step prepares the data necessary for generating reports and visualizations, but no longer generates a PDF report itself.
 
-8.  **`8_xai.py` - AI-Powered Explanation**:
+8.  **`get_best_treatment_candidates.py` - Identify Top Candidates**:
+    -   Reads the analysis results from the final year.
+    -   Identifies the top 10 compounds based on the final 'score' metric.
+    -   Saves this list of potential treatments to `potential_treatments.txt` for easy review.
+
+9.  **`xai.py` - AI-Powered Explanation**:
     -   For the top-ranked compounds, it extracts sentences from the corpus where the compound and the disease co-occur.
     -   It feeds these "evidence sentences" to the Google Gemini API (temporary?) and prompts it to formulate a hypothesis explaining the potential connection, creating the XAI layer.
 
@@ -130,33 +134,24 @@ Follow these instructions to set up and run the project locally.
 
 ## Usage
 
-The entire pipeline is orchestrated by the `run_pipeline.py` script.
+The entire pipeline is orchestrated by the `run_pipeline.py` script, which runs an automated, year-over-year analysis.
 
-1.  **Run the main script:**
+1.  **Set the Target Disease:**
+    Before running, you must specify the disease you want to analyze in the `target_disease.txt` file.
+    ```
+    acute myeloid leukemia
+    ```
+
+2.  **Run the main script:**
     ```sh
     python run_pipeline.py
     ```
 
-2.  **Follow the on-screen menu:**
-    The script will display a menu of the pipeline steps. You can choose to run the entire pipeline from start to finish or execute a specific range of steps.
+3.  **Automated Execution:**
+    The script will automatically execute the entire pipeline in an iterative loop, starting from a configured year (e.g., 1970) up to the current year. For each year, it performs all steps from crawling to analysis.
 
-    ```
-    --- Latent Knowledge Discovery Pipeline ---
-    Please choose the range of steps to execute.
-      1. Crawler
-      2. Merge Txt
-      3. Ner Table Generator
-      4. Clean Summaries
-      5. Train Yoy
-      6. Generate Dotproducts Csv
-      7. Latent Knowledge Report
-      8. Xai
-    -----------------------------------------
-    Enter the start step (1-8): 1
-    Enter the end step (1-8): 8
-    ```
-
-The pipeline will then execute the selected steps in order, printing progress and logging any errors. Outputs for each step are saved in the `data/` directory.
+4.  **Feedback Loop:**
+    A key feature of the new pipeline is the automated feedback loop. After each full iteration (i.e., after processing a year), the script identifies the top treatment candidates and can automatically add them to the `topics_of_interest.txt` file. This allows the crawler to broaden its search in subsequent iterations, creating a powerful discovery cycle.
 
 ## Project Structure
 
@@ -174,19 +169,20 @@ The pipeline will then execute the selected steps in order, printing progress an
 │   │       ├── {model_type}/
 │   │       │   ├── compound_history/  # Step 6: Historical dot product scores
 │   │       │   ├── top_n_compounds/ # Step 7: Top compounds per year
-│   │       │   └── xai/             # Step 8: AI-generated explanations
+│   │       │   └── xai/             # Step 9: AI-generated explanations
 │   │       └── reports/               # Step 7: Final LaTeX/PDF reports
 │   └── pubchem_data/                # Static data for synonym normalization
 ├── src/
-|   ├── 1_crawler.py
-|   ├── 2_merge_txt.py
-|   ├── 3_ner_table_generator.py
-|   ├── 4_clean_summaries.py
-|   ├── 5_train_yoy.py
-|   ├── 6_generate_dotproducts_csv.py
-|   ├── 7_latent_knowledge_report.py
-|   ├── 8_xai.py
-│   └── target_disease.py          # Utility for handling the target disease name
+|   ├── crawler.py
+|   ├── merge_txt.py
+|   ├── ner_table_generator.py
+|   ├── clean_summaries.py
+|   ├── train_yoy.py
+|   ├── generate_dotproducts_csv.py
+|   ├── latent_knowledge_report.py
+|   ├── get_best_treatment_candidates.py
+|   ├── xai.py
+│   └── utils.py                     # Utility functions
 ├── api_key.py                       # (User-created, temporary?) Google API Key
 ├── latent_knowledge_template.tex    # Template for the final report
 ├── README.md
