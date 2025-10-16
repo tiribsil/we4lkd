@@ -69,8 +69,8 @@ def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combi
     os.makedirs(output_dir, exist_ok=True)
     output_filename = os.path.join(output_dir, f'top_{top_n}_{metric}.csv')
 
-    top_chemicals_names = [name for _, _, name in top_scores]
-    top_df = pd.DataFrame({'chemical_name': top_chemicals_names})
+    top_chemicals_data = [{'chemical_name': name, metric: score} for score, _, name in top_scores]
+    top_df = pd.DataFrame(top_chemicals_data)
     top_df.to_csv(output_filename, index=False)
 
     return [file_path for _, file_path, _ in top_scores]

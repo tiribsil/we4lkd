@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 os.chdir(Path(__file__).resolve().parent.parent)
 
+import pandas as pd
 import sys
 
 from src.utils import *
@@ -30,11 +31,8 @@ def main():
     score_file = score_files[0]
 
     try:
-        with open(score_file, 'r', encoding='utf-8') as f:
-            # Skip header
-            next(f)
-            # Read compound names
-            potential_treatments = [line.strip() for _, line in zip(range(TOP_N), f) if line.strip()]
+        df = pd.read_csv(score_file)
+        potential_treatments = df[HEADER_NAME].head(TOP_N).tolist()
     except Exception as e:
         print(f"Error reading score file: {e}", file=sys.stderr)
         return
