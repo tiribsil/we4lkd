@@ -10,18 +10,19 @@ from Bio import Entrez
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class DataCollection:
-    def __init__(self, disease_name: str, start_year: int, max_workers: int = 4):
+    def __init__(self, disease_name: str, start_year: int, target_year: int, max_workers: int = 4, expand_synonyms: bool = False):
         load_dotenv()
 
         self.logger = self.setup_logger("data_collection", log_to_file=False)
 
         self.disease_name = self.normalize_disease_name(disease_name)
         self.start_year = start_year
-        self.end_year = datetime.now().year
+        self.target_year = target_year
         self.retmax_papers = 9998
         self.email = os.getenv("ENTREZ_EMAIL")
         self.api_key = os.getenv("ENTREZ_KEY")
         self.max_workers = max_workers
+        self.expand_synonyms = expand_synonyms
 
 
         Entrez.email = self.email
@@ -48,7 +49,7 @@ class DataCollection:
             with open(topics_file, 'w', encoding='utf-8') as f:
                 f.write(disease_name + '\n')
         topics = self.list_from_file(topics_file)
-        if len(topics) > 1:
+        if len(topics) > 1 and self.expand_synonyms:
             topics = self.get_synonyms_for_terms(topics)
         sub_queries = [f'("{topic}"[Title/Abstract] OR "{topic}"[MeSH Terms])' for topic in topics]
         return f'({" OR ".join(sub_queries)})'
@@ -92,7 +93,7 @@ class DataCollection:
         return list(expanded_terms)
 
     def search(self, query: str, retstart: int = 0):
-        date_filter = f'AND (("{self.start_year}/01/01"[Date - Publication] : "{self.end_year}/12/31"[Date - Publication]))'
+        date_filter = f'AND (("{self.target_year}/01/01"[Date - Publication] : "{self.target_year}/12/31"[Date - Publication]))'
         final_query = f'({query} AND English[Language]) {date_filter}'
         handle = Entrez.esearch(db='pubmed', sort='relevance', retmax=self.retmax_papers,
                                 retstart=retstart, retmode='xml', term=final_query)
@@ -236,7 +237,7 @@ class DataCollection:
         total_papers = len(downloaded_paper_ids) + self.paper_counter
         self.logger.info(f"Crawler finished: {len(downloaded_paper_ids)} existing + {self.paper_counter} new papers = {total_papers} total.")
 
-        self.aggregate_abstracts_by_year(self.start_year, self.end_year)
+        self.aggregate_abstracts_by_year(self.start_year, self.target_year)
 
         elapsed_time = time.time() - start_time
         minutes, seconds = divmod(int(elapsed_time), 60)
@@ -265,5 +266,5 @@ class DataCollection:
 
 
 if __name__ == '__main__':
-    data_collection_module = DataCollection(disease_name="acute myeloid leukemia", start_year=2024)
+    data_collection_module = DataCollection(disease_name="acute myeloid leukemia", start_year=2024, target_year=datetime.now().year, expand_synonyms=True)
     data_collection_module.run()
