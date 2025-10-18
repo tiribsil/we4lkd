@@ -55,7 +55,10 @@ def select_top_n_chemicals_per_year(model_type, normalized_target_disease, combi
             continue
 
     # Sorts the scores in descending order by the specified metric.
-    scores_for_year.sort(key=lambda x: x[0], reverse=True)
+    if metric == 'euclidian_distance':
+        scores_for_year.sort(key=lambda x: x[0])
+    else:
+        scores_for_year.sort(key=lambda x: x[0], reverse=True)
 
     # Selects the top N scores for the year.
     top_scores = scores_for_year[:top_n]

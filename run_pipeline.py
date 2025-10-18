@@ -8,8 +8,7 @@ os.chdir(Path(__file__).resolve().parent)
 sys.path.append(str(Path.cwd()))
 
 from src.utils import get_target_disease, get_normalized_target_disease, set_target_disease
-from src.crawler import run_pubmed_crawler
-from src.merge_txt import aggregate_abstracts_by_year
+from modularization.data_collection_module import DataCollection
 from src.ner_table_generator import generate_ner_table
 from src.clean_summaries import clean_and_normalize_abstracts
 from src.train_yoy import train_word_embedding_models
@@ -18,7 +17,7 @@ from src.latent_knowledge_report import generate_latent_knowledge_report
 from src.get_best_treatment_candidates import main as get_best_treatment_candidates
 
 
-def feedback_new_topics(normalized_target_disease: str, max_new_topics: int = 3, max_topics: int = 4):
+def feedback_new_topics(normalized_target_disease: str, max_new_topics: int = 4, max_topics: int = 4):
     """
     Reads potential treatments and adds them to the topics of interest file,
     including a maximum of 'max_new_topics' at a time.
@@ -98,20 +97,15 @@ def main_pipeline():
     for current_year in range(start_year, end_year + 1):
         print(f"\n{'='*20} Processing year: {current_year} {'='*20}")
 
-        # Step 1: Crawl PubMed for abstracts up to the current year.
-        print("\n--- Step 1: Running PubMed Crawler ---")
-        # We pass the date range to the crawler function.
-        n_papers = run_pubmed_crawler(
-            target_disease=target_disease,
-            normalized_target_disease=normalized_target_disease,
+        # Step 1 & 2: Crawl PubMed and aggregate abstracts up to the current year.
+        print("\n--- Steps 1 & 2: Running Data Collection Module ---")
+        data_collector = DataCollection(
+            disease_name=target_disease,
             start_year=start_year,
-            end_year=current_year
+            target_year=current_year,
+            expand_synonyms=False
         )
-
-        # Step 2: Aggregate abstracts into files from year.
-        print("\n--- Step 2: Aggregating Abstracts ---")
-        aggregated_abstracts = aggregate_abstracts_by_year(normalized_target_disease, start_year, current_year)
-        if not aggregated_abstracts: continue
+        data_collector.run()
 
         # Step 3: Generate NER table from the latest aggregated file.
         print("\n--- Step 3: Generating NER Table ---")
@@ -140,7 +134,7 @@ def main_pipeline():
 
         # Step 9: Backfeed the results into the topics of interest for the next iteration.
         print("\n--- Step 9: Feedback Loop for New Topics ---")
-        feedback_new_topics(normalized_target_disease, max_new_topics=2)
+        feedback_new_topics(normalized_target_disease, max_new_topics=4)
 
     print(f"\n--- Pipeline finished successfully for {target_disease} up to year {end_year} ---")
 
