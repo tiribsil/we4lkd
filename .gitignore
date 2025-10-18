@@ -5,5 +5,8 @@
 /.ipynb_checkpoints
 api_key.py
 latent_knowledge_report_*.tex
-src/__pycache__
+.env
+*__pycache__*
+nohup.out
+venv
 
