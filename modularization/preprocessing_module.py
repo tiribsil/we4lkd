@@ -19,7 +19,7 @@ class Preprocessing:
     def __init__(self, disease_name: str, relevant_spacy_entity_types: Optional[List[str]] = None,
                  target_year: Optional[int] = None, incremental: bool = True):
         load_dotenv()
-        
+
         self.logger = setup_logger("preprocessing", log_to_file=False)
 
         self.disease_name = normalize_disease_name(disease_name)
@@ -30,12 +30,9 @@ class Preprocessing:
         self.target_year = target_year
         self.incremental = incremental
 
-        #self.data_dir = Path(f"./data/{self.disease_name}/corpus")
-        self.data_dir = Path(f"/home/luiza/we4lkd/modularization/data/{self.disease_name}/corpus")
-        #self.output_csv = Path(f"{self.data_dir}/ner_table.csv")
-        self.output_csv = Path("/home/luiza/we4lkd/modularization/data/ner_table.csv")
-        #self.input_file = Path(f"{self.data_dir}/aggregated_abstracts/aggregated_corpus.txt")
-        self.input_file = Path("/home/luiza/we4lkd/modularization/data/acute_myeloid_leukemia/corpus/aggregated_abstracts/aggregated_corpus.txt")
+        self.data_dir = Path(f"./data/{self.disease_name}/corpus")
+        self.output_csv = Path(f"{self.data_dir}/ner_table.csv")
+        self.input_file = Path(f"{self.data_dir}/aggregated_abstracts/aggregated_corpus.txt")
 
         self.nlp = None
         self.load_spacy_model()
@@ -48,10 +45,8 @@ class Preprocessing:
         self._download_nltk_resources()
 
         # Caminhos otimizados para processamento incremental
-        #self.clean_papers_path = Path(f'./data/{self.disease_name}/corpus/clean_abstracts')
-        self.clean_papers_path = Path("/home/luiza/we4lkd/modularization/data/acute_myeloid_leukemia/corpus/clean_abstracts")
-        #self.aggregated_abstracts_path = Path(f'./data/{self.disease_name}/corpus/aggregated_abstracts')
-        self.aggregated_abstracts_path = Path("/home/luiza/we4lkd/modularization/data/acute_myeloid_leukemia/corpus/aggregated_abstracts")
+        self.clean_papers_path = Path(f'./data/{self.disease_name}/corpus/clean_abstracts')
+        self.aggregated_abstracts_path = Path(f'./data/{self.disease_name}/corpus/aggregated_abstracts')
         self.processed_years_file = self.clean_papers_path / 'processed_years.txt'
 
         # Configurações padrão
