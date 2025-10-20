@@ -1,29 +1,45 @@
 import os
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Literal
+from typing import List, Tuple, Optional, Dict, Literal, Callable
 import pandas as pd
+import numpy as np
 from gensim.models import Word2Vec, FastText
 from gensim.models.callbacks import CallbackAny2Vec
+import optuna
+from optuna.trial import Trial
+from optuna.pruners import MedianPruner
+from optuna.samplers import TPESampler
 from utils import *
 
 
 class EmbeddingCallback(CallbackAny2Vec):
     """Callback para monitorar treinamento."""
     
-    def __init__(self, logger, total_epochs: int):
+    def __init__(self, logger, total_epochs: int, trial: Optional[Trial] = None):
         self.logger = logger
         self.total_epochs = total_epochs
         self.epoch = 0
+        self.trial = trial
 
     def on_epoch_end(self, model):
         self.epoch += 1
+        loss = model.get_latest_training_loss()
+        
         if self.epoch % 5 == 0 or self.epoch == self.total_epochs:
-            self.logger.info(f"Epoch {self.epoch}/{self.total_epochs} completed")
+            self.logger.info(f"Epoch {self.epoch}/{self.total_epochs} - Loss: {loss:.4f}")
+        
+        # Report intermediate value para pruning
+        if self.trial is not None:
+            self.trial.report(loss, self.epoch)
+            
+            # Check if trial should be pruned
+            if self.trial.should_prune():
+                raise optuna.TrialPruned()
 
 
 class EmbeddingTraining:
     """
-    Module for training Word2Vec and FastText embedding models.
+    Module for training Word2Vec and FastText embedding models with Optuna optimization.
     Supports year-over-year training on cleaned abstracts.
     """
     
@@ -42,7 +58,11 @@ class EmbeddingTraining:
         disease_name: str,
         start_year: int,
         end_year: int,
+        model_type: Literal['w2v', 'ft'] = 'w2v',
         parameters: Optional[List[Dict[str, float]]] = None,
+        use_optuna: bool = False,
+        optuna_trials: int = 50,
+        optuna_timeout: Optional[int] = None,
     ):
         """
         Initialize embedding training module.
@@ -53,30 +73,36 @@ class EmbeddingTraining:
             end_year: Ending year for training data
             model_type: Type of model ('w2v' for Word2Vec, 'ft' for FastText)
             parameters: List of parameter combinations for the model
-            min_count: Minimum word frequency threshold
-            sg: Training algorithm (1=skip-gram, 0=CBOW)
-            hs: Use hierarchical softmax (1=yes, 0=negative sampling)
-            epochs: Number of training epochs
-            min_corpus_size: Minimum number of abstracts required
-            workers: Number of worker threads
+            use_optuna: Whether to use Optuna for hyperparameter optimization
+            optuna_trials: Number of Optuna trials
+            optuna_timeout: Timeout in seconds for Optuna optimization
         """
         self.logger = setup_logger("embedding_training", log_to_file=False)
         
         self.disease_name = normalize_disease_name(disease_name)
-        self.start_year = 2024
-        self.end_year = 2025
+        self.start_year = start_year
+        self.end_year = end_year
         
         # Validar model_type
-        self.model_type = 'w2v' #['w2v', 'ft']
+        if model_type not in ['w2v', 'ft']:
+            raise ValueError(f"model_type must be 'w2v' or 'ft', got '{model_type}'")
+        self.model_type = model_type
+        
+        # Optuna settings
+        self.use_optuna = use_optuna
+        self.optuna_trials = optuna_trials
+        self.optuna_timeout = optuna_timeout
         
         # Configurar parâmetros
-        if parameters is None:
+        if parameters is None and not use_optuna:
             self.parameters = (
                 self.DEFAULT_W2V_PARAMS if self.model_type == 'w2v' 
                 else self.DEFAULT_FT_PARAMS
             )
-        else:
+        elif parameters is not None:
             self.parameters = parameters
+        else:
+            self.parameters = []  # Será definido pelo Optuna
         
         # Parâmetros de treinamento
         self.min_count = 2
@@ -92,18 +118,24 @@ class EmbeddingTraining:
         
         # Caminhos para modelos
         self.models_path = self.base_path / 'models'
-        self.w2v_path = self.models_path / 'w2v_combination15'
-        self.ft_path = self.models_path / 'ft_combination16'
+        self.w2v_path = self.models_path / 'w2v_models'
+        self.ft_path = self.models_path / 'ft_models'
+        self.optuna_path = self.models_path / 'optuna_studies'
         
         # Criar diretórios
         self.w2v_path.mkdir(parents=True, exist_ok=True)
         self.ft_path.mkdir(parents=True, exist_ok=True)
+        self.optuna_path.mkdir(parents=True, exist_ok=True)
         
         # Cache
         self._corpus_df = None
+        self._train_sentences = None
+        self._val_sentences = None
         
         self.logger.info(f"EmbeddingTraining initialized for {self.disease_name}")
         self.logger.info(f"Model type: {self.model_type.upper()}, Years: {start_year}-{end_year}")
+        if use_optuna:
+            self.logger.info(f"Optuna optimization enabled: {optuna_trials} trials")
 
     @property
     def corpus_df(self) -> pd.DataFrame:
@@ -122,15 +154,12 @@ class EmbeddingTraining:
         try:
             self.logger.info(f"Loading corpus from {self.corpus_path}")
             
-            # Ler CSV
             df = pd.read_csv(self.corpus_path)
             
-            # Verificar colunas necessárias
             if 'summary' not in df.columns:
                 self.logger.error("Column 'summary' not found in corpus")
                 return None
             
-            # Adicionar coluna de ano se não existir (extrair do índice se necessário)
             if 'year_extracted' not in df.columns and 'year' not in df.columns:
                 self.logger.warning("No year column found. Using all data without year filtering.")
                 df['year_extracted'] = self.end_year
@@ -144,57 +173,261 @@ class EmbeddingTraining:
             self.logger.error(f"Error loading corpus: {e}")
             return None
 
-    def _prepare_sentences(self, year_filter: Optional[int] = None) -> List[List[str]]:
+    def _prepare_sentences(self, year_filter: Optional[int] = None, 
+                          validation_split: float = 0.0) -> Tuple[List[List[str]], Optional[List[List[str]]]]:
         """
-        Prepara sentenças para treinamento.
+        Prepara sentenças para treinamento e validação.
         
         Args:
             year_filter: Se fornecido, filtra abstracts até este ano
+            validation_split: Proporção para validação (0.0 a 1.0)
             
         Returns:
-            Lista de sentenças tokenizadas
+            Tupla (train_sentences, val_sentences)
         """
         df = self.corpus_df
         
         if df is None or df.empty:
-            return []
+            return [], None
         
-        # Filtrar por ano se especificado
         if year_filter and 'year_extracted' in df.columns:
             df = df[df['year_extracted'] <= year_filter]
         
-        # Remover NaN e converter para lista
         abstracts = df['summary'].dropna().tolist()
         
         self.logger.info(f"Preparing {len(abstracts)} abstracts for training")
         
-        # Tokenizar (split por espaços)
         sentences = [abstract.split() for abstract in abstracts if abstract]
-        
-        # Filtrar sentenças vazias
         sentences = [s for s in sentences if len(s) > 0]
         
-        return sentences
+        # Split para validação se necessário
+        if validation_split > 0 and len(sentences) > 1:
+            np.random.seed(42)
+            np.random.shuffle(sentences)
+            
+            split_idx = int(len(sentences) * (1 - validation_split))
+            train_sentences = sentences[:split_idx]
+            val_sentences = sentences[split_idx:]
+            
+            self.logger.info(f"Split: {len(train_sentences)} train, {len(val_sentences)} validation")
+            return train_sentences, val_sentences
+        
+        return sentences, None
 
-    def _get_model_path(self, param_idx: int = 0) -> Path:
+    def _evaluate_model(self, model, val_sentences: List[List[str]]) -> float:
+        """
+        Avalia modelo usando perplexidade aproximada no conjunto de validação.
+        
+        Args:
+            model: Modelo treinado
+            val_sentences: Sentenças de validação
+            
+        Returns:
+            Score de avaliação (menor é melhor)
+        """
+        if not val_sentences:
+            return float('inf')
+        
+        total_score = 0
+        valid_words = 0
+        
+        for sentence in val_sentences:
+            for i, word in enumerate(sentence):
+                if word in model.wv:
+                    # Context words
+                    context = [w for j, w in enumerate(sentence) 
+                             if j != i and w in model.wv]
+                    
+                    if context:
+                        try:
+                            # Similaridade média com contexto
+                            similarities = [model.wv.similarity(word, ctx) 
+                                          for ctx in context[:5]]  # Limitar contexto
+                            total_score += np.mean(similarities)
+                            valid_words += 1
+                        except:
+                            continue
+        
+        if valid_words == 0:
+            return float('inf')
+        
+        # Retornar score negativo (queremos maximizar similaridade)
+        return -total_score / valid_words
+
+    def _get_model_path(self, param_idx: int = 0, suffix: str = "") -> Path:
         """Retorna o caminho para salvar o modelo."""
-        if self.model_type == 'w2v':
-            base_path = self.w2v_path
-        else:
-            base_path = self.ft_path
+        base_path = self.w2v_path if self.model_type == 'w2v' else self.ft_path
         
         model_name = f"model_{self.start_year}_{self.end_year}"
         
-        if len(self.parameters) > 1:
+        if suffix:
+            model_name += f"_{suffix}"
+        elif len(self.parameters) > 1:
             model_name += f"_params{param_idx}"
         
         return base_path / f"{model_name}.model"
+
+    def _objective(self, trial: Trial, sentences: List[List[str]], 
+                   val_sentences: Optional[List[List[str]]]) -> float:
+        """
+        Função objetivo para Optuna.
+        
+        Args:
+            trial: Trial do Optuna
+            sentences: Sentenças de treinamento
+            val_sentences: Sentenças de validação
+            
+        Returns:
+            Score a minimizar
+        """
+        # Sugerir hiperparâmetros
+        params = {
+            'vector_size': trial.suggest_categorical('vector_size', [50, 100, 150, 200, 300]),
+            'alpha': trial.suggest_float('alpha', 0.001, 0.05, log=True),
+            'negative': trial.suggest_int('negative', 5, 20),
+            'window': trial.suggest_int('window', 3, 10),
+            'min_count': trial.suggest_int('min_count', 1, 5),
+        }
+        
+        # Parâmetros específicos do FastText
+        if self.model_type == 'ft':
+            params['min_n'] = trial.suggest_int('min_n', 2, 4)
+            params['max_n'] = trial.suggest_int('max_n', 4, 6)
+        
+        try:
+            callback = EmbeddingCallback(self.logger, self.epochs, trial)
+            
+            common_params = {
+                'sentences': sentences,
+                'vector_size': params['vector_size'],
+                'alpha': params['alpha'],
+                'negative': params['negative'],
+                'window': params['window'],
+                'min_count': params['min_count'],
+                'sg': self.sg,
+                'hs': self.hs,
+                'epochs': self.epochs,
+                'workers': self.workers,
+                'sorted_vocab': True,
+                'compute_loss': True,
+                'callbacks': [callback]
+            }
+            
+            if self.model_type == 'w2v':
+                model = Word2Vec(**common_params)
+            else:
+                common_params['min_n'] = params['min_n']
+                common_params['max_n'] = params['max_n']
+                model = FastText(**common_params)
+            
+            # Avaliar no conjunto de validação
+            if val_sentences:
+                score = self._evaluate_model(model, val_sentences)
+            else:
+                # Usar loss de treinamento se não houver validação
+                score = model.get_latest_training_loss()
+            
+            # Salvar melhores parâmetros
+            trial.set_user_attr('params', params)
+            
+            return score
+            
+        except optuna.TrialPruned:
+            raise
+        except Exception as e:
+            self.logger.error(f"Error in trial: {e}")
+            return float('inf')
+
+    def optimize_hyperparameters(self, year_filter: Optional[int] = None,
+                                validation_split: float = 0.2) -> Dict:
+        """
+        Otimiza hiperparâmetros usando Optuna.
+        
+        Args:
+            year_filter: Se fornecido, usa apenas abstracts até este ano
+            validation_split: Proporção para validação
+            
+        Returns:
+            Dicionário com melhores parâmetros
+        """
+        self.logger.info("=== Starting Optuna Hyperparameter Optimization ===")
+        
+        # Preparar dados
+        train_sentences, val_sentences = self._prepare_sentences(
+            year_filter or self.end_year, 
+            validation_split
+        )
+        
+        if not train_sentences:
+            self.logger.error("No sentences available for optimization")
+            return {}
+        
+        if len(train_sentences) < self.min_corpus_size:
+            self.logger.warning(f"Corpus too small: {len(train_sentences)} abstracts")
+            return {}
+        
+        # Criar estudo Optuna
+        study_name = f"{self.model_type}_{self.disease_name}_{self.start_year}_{self.end_year}"
+        storage_path = self.optuna_path / f"{study_name}.db"
+        
+        study = optuna.create_study(
+            study_name=study_name,
+            storage=f"sqlite:///{storage_path}",
+            load_if_exists=True,
+            direction='minimize',
+            sampler=TPESampler(seed=42),
+            pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=5)
+        )
+        
+        # Otimizar
+        self.logger.info(f"Running {self.optuna_trials} trials...")
+        study.optimize(
+            lambda trial: self._objective(trial, train_sentences, val_sentences),
+            n_trials=self.optuna_trials,
+            timeout=self.optuna_timeout,
+            show_progress_bar=True
+        )
+        
+        # Resultados
+        best_params = study.best_params
+        best_value = study.best_value
+        
+        self.logger.info(f"\n{'='*60}")
+        self.logger.info(f"Optimization Complete!")
+        self.logger.info(f"Best value: {best_value:.4f}")
+        self.logger.info(f"Best parameters:")
+        for param, value in best_params.items():
+            self.logger.info(f"  {param}: {value}")
+        self.logger.info(f"{'='*60}\n")
+        
+        # Salvar resumo
+        summary_path = self.optuna_path / f"{study_name}_summary.txt"
+        with open(summary_path, 'w') as f:
+            f.write(f"Optuna Study Summary\n")
+            f.write(f"{'='*60}\n")
+            f.write(f"Study name: {study_name}\n")
+            f.write(f"Best value: {best_value:.4f}\n")
+            f.write(f"Best trial: {study.best_trial.number}\n")
+            f.write(f"\nBest parameters:\n")
+            for param, value in best_params.items():
+                f.write(f"  {param}: {value}\n")
+            f.write(f"\nTotal trials: {len(study.trials)}\n")
+            f.write(f"Completed trials: {len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])}\n")
+            f.write(f"Pruned trials: {len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED])}\n")
+        
+        self.logger.info(f"Study summary saved to {summary_path}")
+        
+        # Atualizar parâmetros para usar os melhores
+        self.parameters = [best_params]
+        
+        return best_params
 
     def _train_single_model(
         self,
         sentences: List[List[str]],
         params: Dict[str, float],
-        param_idx: int = 0
+        param_idx: int = 0,
+        suffix: str = ""
     ) -> Optional[object]:
         """
         Treina um único modelo com os parâmetros especificados.
@@ -203,21 +436,22 @@ class EmbeddingTraining:
             sentences: Sentenças tokenizadas
             params: Dicionário com parâmetros do modelo
             param_idx: Índice da combinação de parâmetros
+            suffix: Sufixo para nome do arquivo
             
         Returns:
             Modelo treinado ou None se falhar
         """
         try:
-            # Callback para monitoramento
             callback = EmbeddingCallback(self.logger, self.epochs)
             
             # Parâmetros comuns
             common_params = {
                 'sentences': sentences,
-                'vector_size': params['vector_size'],
-                'alpha': params['alpha'],
-                'negative': params['negative'],
-                'min_count': self.min_count,
+                'vector_size': params.get('vector_size', 100),
+                'alpha': params.get('alpha', 0.025),
+                'negative': params.get('negative', 10),
+                'window': params.get('window', 5),
+                'min_count': params.get('min_count', self.min_count),
                 'sg': self.sg,
                 'hs': self.hs,
                 'epochs': self.epochs,
@@ -233,10 +467,12 @@ class EmbeddingTraining:
             if self.model_type == 'w2v':
                 model = Word2Vec(**common_params)
             else:
+                common_params['min_n'] = params.get('min_n', 3)
+                common_params['max_n'] = params.get('max_n', 5)
                 model = FastText(**common_params)
             
             # Salvar modelo
-            model_path = self._get_model_path(param_idx)
+            model_path = self._get_model_path(param_idx, suffix)
             model.save(str(model_path))
             
             # Informações do modelo
@@ -263,14 +499,17 @@ class EmbeddingTraining:
         Returns:
             Dicionário com índice de parâmetros -> modelo treinado
         """
+        # Otimizar hiperparâmetros se necessário
+        if self.use_optuna and not self.parameters:
+            self.optimize_hyperparameters(year_filter)
+        
         # Preparar sentenças
-        sentences = self._prepare_sentences(year_filter or self.end_year)
+        sentences, _ = self._prepare_sentences(year_filter or self.end_year)
         
         if not sentences:
             self.logger.error("No sentences available for training")
             return {}
         
-        # Verificar tamanho mínimo do corpus
         if len(sentences) < self.min_corpus_size:
             self.logger.warning(
                 f"Corpus too small: {len(sentences)} abstracts "
@@ -285,7 +524,8 @@ class EmbeddingTraining:
         for idx, params in enumerate(self.parameters):
             self.logger.info(f"\n=== Training model {idx + 1}/{len(self.parameters)} ===")
             
-            model = self._train_single_model(sentences, params, idx)
+            suffix = "optuna_best" if self.use_optuna and idx == 0 else ""
+            model = self._train_single_model(sentences, params, idx, suffix)
             if model:
                 models[idx] = model
         
@@ -330,15 +570,7 @@ class EmbeddingTraining:
         return all_models
 
     def get_model_info(self, model_path: Path) -> Optional[Dict[str, any]]:
-        """
-        Carrega informações sobre um modelo salvo.
-        
-        Args:
-            model_path: Caminho do modelo
-            
-        Returns:
-            Dicionário com informações do modelo
-        """
+        """Carrega informações sobre um modelo salvo."""
         try:
             if self.model_type == 'w2v':
                 model = Word2Vec.load(str(model_path))
@@ -366,7 +598,7 @@ class EmbeddingTraining:
         
         return models
 
-    def run(self, year_over_year: bool = True, step: int = 1) -> bool:
+    def run(self, year_over_year: bool = False, step: int = 1) -> bool:
         """
         Executa pipeline de treinamento.
         
@@ -381,7 +613,11 @@ class EmbeddingTraining:
             self.logger.info("=== Starting Embedding Training Pipeline ===")
             self.logger.info(f"Disease: {self.disease_name}")
             self.logger.info(f"Model type: {self.model_type.upper()}")
-            self.logger.info(f"Parameters combinations: {len(self.parameters)}")
+            
+            if self.use_optuna:
+                self.logger.info(f"Optuna optimization: {self.optuna_trials} trials")
+            else:
+                self.logger.info(f"Parameters combinations: {len(self.parameters)}")
             
             if year_over_year:
                 models = self.train_year_over_year(step=step)
@@ -404,10 +640,27 @@ class EmbeddingTraining:
 
 
 if __name__ == '__main__':
-    trainer = EmbeddingTraining(disease_name="acute myeloid leukemia",
-                                start_year=2024,
-                                end_year=2025)
+    # Exemplo 1: Treinar com Optuna
+    trainer_optuna = EmbeddingTraining(
+        disease_name="acute myeloid leukemia",
+        start_year=2024,
+        end_year=2025,
+        model_type='w2v',
+        use_optuna=True,
+        optuna_trials=30,
+        optuna_timeout=3600  # 1 hora
+    )
     
-    success = trainer.run(year_over_year=True)
+    success = trainer_optuna.run(year_over_year=False)
+    
+    # Exemplo 2: Treinar com parâmetros fixos
+    # trainer_fixed = EmbeddingTraining(
+    #     disease_name="acute myeloid leukemia",
+    #     start_year=2024,
+    #     end_year=2025,
+    #     model_type='w2v',
+    #     use_optuna=False
+    # )
+    # success = trainer_fixed.run(year_over_year=True)
     
     exit(0 if success else 1)
