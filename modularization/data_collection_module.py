@@ -24,47 +24,51 @@ class DataCollection:
         self.max_workers = max_workers
         self.expand_synonyms = expand_synonyms
 
-
         Entrez.email = self.email
         Entrez.api_key = self.api_key
 
-        self.raw_abstracts_path = os.path.join('.', 'data', self.disease_name, 'corpus', 'raw_abstracts')
-        self.downloaded_paper_ids_path = os.path.join('.', 'data', self.disease_name, 'corpus', 'ids.txt')
-        os.makedirs(self.raw_abstracts_path, exist_ok=True)
+        self.raw_abstracts_path = Path('.') / 'data' / self.disease_name / 'corpus' / 'raw_abstracts'
+        self.aggregated_path = Path('.') / 'data' / self.disease_name / 'corpus' / 'aggregated_abstracts'
+        self.downloaded_paper_ids_path = Path('.') / 'data' / self.disease_name / 'corpus' / 'ids.txt'
+        
+        self.raw_abstracts_path.mkdir(parents=True, exist_ok=True)
+        self.aggregated_path.mkdir(parents=True, exist_ok=True)
 
         self.paper_counter = 0
 
     def normalize_disease_name(self, disease_name: str) -> str:
         return disease_name.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
 
-    def list_from_file(self, file_path: str) -> list:
-        if not os.path.exists(file_path):
+    def list_from_file(self, file_path: Path) -> list:
+        if not file_path.exists():
             return []
         with open(file_path, 'r', encoding='utf-8') as f:
-            return [line.strip() for line in f]
+            return [line.strip() for line in f if line.strip()]
 
     def generate_query(self, disease_name: str) -> str:
-        topics_file = os.path.join('.', 'data', disease_name, 'topics_of_interest.txt')
-        if not os.path.exists(topics_file):
-            with open(topics_file, 'w', encoding='utf-8') as f:
-                f.write(disease_name + '\n')
+        topics_file = Path('.') / 'data' / disease_name / 'topics_of_interest.txt'
+        if not topics_file.exists():
+            topics_file.parent.mkdir(parents=True, exist_ok=True)
+            topics_file.write_text(disease_name + '\n', encoding='utf-8')
+        
         topics = self.list_from_file(topics_file)
         if len(topics) > 1 and self.expand_synonyms:
             topics = self.get_synonyms_for_terms(topics)
+        
         sub_queries = [f'("{topic}"[Title/Abstract] OR "{topic}"[MeSH Terms])' for topic in topics]
         return f'({" OR ".join(sub_queries)})'
 
     def get_synonyms_for_terms(self, terms: list) -> list:
         self.logger.info("Reading PubChem data to find synonyms...")
-        titles_path = 'data/pubchem_data/CID-Title'
-        synonyms_path = 'data/pubchem_data/CID-Synonym-filtered'
+        titles_path = Path('data/pubchem_data/CID-Title')
+        synonyms_path = Path('data/pubchem_data/CID-Synonym-filtered')
 
         title_to_cid, cid_to_synonyms = {}, {}
 
         try:
             with open(titles_path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    parts = line.strip().split('\t')
+                    parts = line.strip().split('\t', 1)
                     if len(parts) == 2:
                         cid, title = parts
                         title_to_cid[title.lower()] = cid
@@ -75,7 +79,7 @@ class DataCollection:
         try:
             with open(synonyms_path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    parts = line.strip().split('\t')
+                    parts = line.strip().split('\t', 1)
                     if len(parts) == 2:
                         cid, synonym = parts
                         cid_to_synonyms.setdefault(cid, []).append(synonym)
@@ -95,101 +99,241 @@ class DataCollection:
     def search(self, query: str, retstart: int = 0):
         date_filter = f'AND (("{self.target_year}/01/01"[Date - Publication] : "{self.target_year}/12/31"[Date - Publication]))'
         final_query = f'({query} AND English[Language]) {date_filter}'
-        handle = Entrez.esearch(db='pubmed', sort='relevance', retmax=self.retmax_papers,
-                                retstart=retstart, retmode='xml', term=final_query)
-        found = Entrez.read(handle)
-        handle.close()
-        return found
+        
+        try:
+            handle = Entrez.esearch(db='pubmed', sort='relevance', retmax=self.retmax_papers,
+                                    retstart=retstart, retmode='xml', term=final_query)
+            found = Entrez.read(handle)
+            handle.close()
+            return found
+        except Exception as e:
+            self.logger.error(f"Error searching PubMed: {e}")
+            return {}
 
     def fetch_details_chunk(self, paper_ids_chunk: list):
         ids_string = ','.join(paper_ids_chunk)
-        handle = Entrez.efetch(db='pubmed', retmode='xml', id=ids_string)
-        papers = Entrez.read(handle)
-        handle.close()
-        time.sleep(0.35)  # protege contra limite de requisições
-        return papers
+        try:
+            handle = Entrez.efetch(db='pubmed', retmode='xml', id=ids_string)
+            papers = Entrez.read(handle)
+            handle.close()
+            time.sleep(0.35)
+            return papers
+        except Exception as e:
+            self.logger.error(f"Error fetching chunk: {e}")
+            return None
 
     def fetch_details_parallel(self, paper_ids: list, chunk_size: int = 200):
         results = []
         chunks = [paper_ids[i:i + chunk_size] for i in range(0, len(paper_ids), chunk_size)]
+        
+        total_chunks = len(chunks)
+        self.logger.info(f"Fetching {len(paper_ids)} papers in {total_chunks} chunks...")
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_chunk = {executor.submit(self.fetch_details_chunk, chunk): chunk for chunk in chunks}
+            future_to_chunk = {
+                executor.submit(self.fetch_details_chunk, chunk): idx 
+                for idx, chunk in enumerate(chunks)
+            }
+            
+            completed = 0
             for future in as_completed(future_to_chunk):
+                completed += 1
                 try:
                     papers = future.result()
-                    results.append(papers)
+                    if papers:
+                        results.append(papers)
+                    
+                    if completed % 10 == 0 or completed == total_chunks:
+                        self.logger.info(f"Progress: {completed}/{total_chunks} chunks fetched")
+                        
                 except Exception as e:
-                    self.logger.warning(f"Error fetching chunk: {e}")
+                    self.logger.warning(f"Error processing chunk: {e}")
 
         return results
-    
+
+    def _get_affected_years(self, new_papers_count: int) -> set:
+        """Identifica quais anos tiveram novos papers adicionados."""
+        if new_papers_count == 0:
+            return set()
+        
+        # Buscar apenas arquivos recém-adicionados (últimos N arquivos por modificação)
+        all_files = sorted(
+            self.raw_abstracts_path.glob('*.txt'),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True
+        )
+        
+        affected_years = set()
+        for fname in all_files[:new_papers_count]:
+            try:
+                year_str = fname.stem[:4]
+                if year_str.isdigit():
+                    affected_years.add(int(year_str))
+            except Exception:
+                continue
+        
+        return affected_years
+
+    def aggregate_abstracts_incremental(self, affected_years: set) -> bool:
+        """Agrega apenas os anos afetados e atualiza corpus cumulativo."""
+        if not affected_years:
+            self.logger.info("No new papers to aggregate.")
+            return True
+        
+        self.logger.info(f"Aggregating papers for years: {sorted(affected_years)}")
+        
+        # Processar apenas arquivos dos anos afetados
+        yearly_papers = {year: [] for year in affected_years}
+        new_corpus_entries = []
+        
+        for year in affected_years:
+            year_files = sorted(self.raw_abstracts_path.glob(f'{year}_*.txt'))
+            
+            for fname in year_files:
+                try:
+                    stem = fname.stem
+                    title = stem[5:].replace('_', ' ').capitalize()
+                    content = fname.read_text(encoding='utf-8').strip().replace('\n', ' ')
+                    
+                    yearly_papers[year].append(f"{title}|{content}")
+                    new_corpus_entries.append(f"{title}|{content}")
+                    
+                except Exception as e:
+                    self.logger.warning(f"Error processing {fname}: {e}")
+                    continue
+        
+        # Atualizar arquivos anuais afetados
+        for year in affected_years:
+            papers = yearly_papers[year]
+            if papers:
+                self.logger.info(f'Aggregating {len(papers)} papers from year {year}.')
+                yearly_file = self.aggregated_path / f'results_file_{year}.txt'
+                yearly_file.write_text('\n'.join(papers), encoding='utf-8')
+        
+        # Atualizar corpus cumulativo
+        corpus_file = self.aggregated_path / 'aggregated_corpus.txt'
+        
+        if not corpus_file.exists():
+            # Primeira execução: criar corpus completo
+            self.logger.info("Creating new cumulative corpus...")
+            return self.aggregate_abstracts_full()
+        else:
+            # Append incremental
+            if new_corpus_entries:
+                self.logger.info(f'Appending {len(new_corpus_entries)} new papers to cumulative corpus.')
+                with open(corpus_file, 'a', encoding='utf-8') as f:
+                    f.write('\n' + '\n'.join(new_corpus_entries))
+        
+        return True
+
+    def aggregate_abstracts_full(self) -> bool:
+        """Agrega todos os abstracts (usado apenas na primeira execução)."""
+        filenames = sorted(self.raw_abstracts_path.glob('*.txt'))
+        if not filenames:
+            self.logger.warning('No files found in raw_abstracts directory.')
+            return False
+
+        self.logger.info(f"Processing {len(filenames)} files for full aggregation...")
+        
+        # Processar todos os arquivos
+        processed_files = []
+        for fname in filenames:
+            try:
+                stem = fname.stem
+                year_str = stem[:4]
+                
+                if not year_str.isdigit():
+                    continue
+                
+                year = int(year_str)
+                title = stem[5:].replace('_', ' ').capitalize()
+                content = fname.read_text(encoding='utf-8').strip().replace('\n', ' ')
+                processed_files.append((year, title, content))
+                
+            except Exception as e:
+                self.logger.warning(f"Error processing {fname}: {e}")
+                continue
+
+        if not processed_files:
+            self.logger.warning("No valid files processed.")
+            return False
+
+        # Agregar por ano
+        yearly_papers = {}
+        for year, title, content in processed_files:
+            if self.start_year <= year <= self.target_year:
+                yearly_papers.setdefault(year, []).append(f"{title}|{content}")
+
+        # Salvar arquivos por ano
+        for year in range(self.start_year, self.target_year + 1):
+            papers = yearly_papers.get(year, [])
+            if papers:
+                self.logger.info(f'Aggregating {len(papers)} papers from year {year}.')
+                yearly_file = self.aggregated_path / f'results_file_{year}.txt'
+                yearly_file.write_text('\n'.join(papers), encoding='utf-8')
+
+        # Criar corpus completo
+        full_corpus = [f"{title}|{content}" for _, title, content in processed_files]
+        self.logger.info(f'Creating cumulative aggregation of all {len(full_corpus)} papers.')
+        
+        corpus_file = self.aggregated_path / 'aggregated_corpus.txt'
+        corpus_file.write_text('\n'.join(full_corpus), encoding='utf-8')
+        self.logger.info(f'Full corpus saved to {corpus_file}')
+        
+        return True
 
     def aggregate_abstracts_by_year(self, start_year: int, end_year: int):
         """
-        Aggregates raw abstract text files into yearly files and a single cumulative corpus file.
-        For each year from start_year to end_year, it creates a file with all abstracts from that year.
+        Método mantido para compatibilidade, mas agora usa agregação incremental.
+        DEPRECATED: Use aggregate_abstracts_incremental() ou aggregate_abstracts_full().
         """
-        source_path = Path(f'./data/{self.disease_name}/corpus/raw_abstracts')
-        destination_path = Path(f'./data/{self.disease_name}/corpus/aggregated_abstracts')
-        destination_path.mkdir(parents=True, exist_ok=True)
-
-        # Get all raw abstracts
-        filenames = sorted(source_path.glob('*.txt'))
-        if not filenames:
-            self.logger.info('No files found in raw_abstracts directory. Have you run the crawler first?')
-            return False
-
-        # Preprocess files once: read content and extract year + title
-        processed_files = []
-        for fname in filenames:
-            stem = fname.stem
-            year = int(stem[:4])
-            title = stem[5:].replace('_', ' ').capitalize()
-            content = fname.read_text(encoding='utf-8').strip().replace('\n', ' ')
-            processed_files.append((year, title, content))
-
-        # Aggregate per year
-        for year in range(start_year, end_year + 1):
-            yearly_content = [f"{title}|{content}" for y, title, content in processed_files if y == year]
-            self.logger.info(f'Aggregating {len(yearly_content)} papers from the year {year}.')
-            if yearly_content:
-                (destination_path / f'results_file_{year}.txt').write_text('\n'.join(yearly_content), encoding='utf-8')
-
-        # Aggregate full corpus
-        full_corpus_content = [f"{title}|{content}" for _, title, content in processed_files]
-        self.logger.info(f'\nCreating a cumulative aggregation of all {len(full_corpus_content)} papers.')
-        full_corpus_file = destination_path / 'aggregated_corpus.txt'
-        full_corpus_file.write_text('\n'.join(full_corpus_content), encoding='utf-8')
-        self.logger.info(f'Full corpus saved to {full_corpus_file}')
-
-        return True
+        # Detectar se há novos papers baseado no paper_counter
+        if self.paper_counter > 0:
+            affected_years = self._get_affected_years(self.paper_counter)
+            return self.aggregate_abstracts_incremental(affected_years)
+        else:
+            # Se não há novos papers, verificar se corpus existe
+            corpus_file = self.aggregated_path / 'aggregated_corpus.txt'
+            if not corpus_file.exists():
+                return self.aggregate_abstracts_full()
+            return True
 
     def run(self):
         start_time = time.time()
         self.logger.info(f'Target disease: {self.disease_name}')
+        self.logger.info(f'Target year: {self.target_year}')
+        
         query = self.generate_query(self.disease_name).encode('ascii', 'ignore').decode('ascii')
 
         downloaded_paper_ids = set(self.list_from_file(self.downloaded_paper_ids_path))
+        self.logger.info(f"Already have {len(downloaded_paper_ids)} papers downloaded.")
         self.logger.info("Searching for papers...")
 
         all_new_paper_ids = set()
-        start_index, batch_size = 0, self.retmax_papers
+        start_index = 0
 
         while True:
             self.logger.info(f"Searching papers from index {start_index}...")
             search_results = self.search(query, retstart=start_index)
             batch_ids = set(search_results.get('IdList', []))
+            
             if not batch_ids:
-                self.logger.info("No new results found. Ending search.")
+                self.logger.info("No more results found.")
                 break
+            
             all_new_paper_ids.update(batch_ids)
-            start_index += batch_size
+            start_index += self.retmax_papers
             time.sleep(0.35)
 
         new_paper_id_list = list(all_new_paper_ids - downloaded_paper_ids)
+        
         if not new_paper_id_list:
             self.logger.info("No new papers found.")
+            # Verificar se corpus existe
+            corpus_file = self.aggregated_path / 'aggregated_corpus.txt'
+            if not corpus_file.exists():
+                self.logger.info("Corpus file not found. Creating full aggregation...")
+                self.aggregate_abstracts_full()
             return 0
 
         self.logger.info(f"{len(new_paper_id_list)} new papers found.")
@@ -197,6 +341,9 @@ class DataCollection:
         papers_chunks = self.fetch_details_parallel(new_paper_id_list)
 
         for papers in papers_chunks:
+            if not papers or 'PubmedArticle' not in papers:
+                continue
+                
             for paper in papers['PubmedArticle']:
                 try:
                     article_title = paper['MedlineCitation']['Article']['ArticleTitle']
@@ -211,6 +358,9 @@ class DataCollection:
                 else:
                     article_abstract = str(abstract_texts)
 
+                if not article_abstract or article_abstract == 'None':
+                    continue
+
                 try:
                     article_year = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate'].get('Year')
                     if not article_year:
@@ -218,32 +368,40 @@ class DataCollection:
                 except KeyError:
                     continue
 
-                if len(article_year) != 4:
+                if not article_year or len(article_year) != 4 or not article_year.isdigit():
                     continue
 
                 filename = f"{article_year}_{article_title_filename[:146]}"
                 filename = filename.encode('ascii', 'ignore').decode('ascii')
-                path_name = os.path.join(self.raw_abstracts_path, f"{filename}.txt")
+                path_name = self.raw_abstracts_path / f"{filename}.txt"
 
-                with open(path_name, "w", encoding='utf-8') as file:
-                    file.write(article_title + ' ' + article_abstract)
+                try:
+                    path_name.write_text(article_title + ' ' + article_abstract, encoding='utf-8')
+                    self.paper_counter += 1
+                except Exception as e:
+                    self.logger.error(f"Error saving paper: {e}")
+                    continue
 
-                self.paper_counter += 1
-
-        with open(self.downloaded_paper_ids_path, 'a+', encoding='utf-8') as file:
-            for new_id in new_paper_id_list:
-                file.write(str(new_id) + '\n')
+        # Salvar IDs em lote
+        if new_paper_id_list:
+            with open(self.downloaded_paper_ids_path, 'a', encoding='utf-8') as file:
+                file.write('\n'.join([str(id) for id in new_paper_id_list]) + '\n')
         
         total_papers = len(downloaded_paper_ids) + self.paper_counter
-        self.logger.info(f"Crawler finished: {len(downloaded_paper_ids)} existing + {self.paper_counter} new papers = {total_papers} total.")
+        self.logger.info(
+            f"Crawler finished: {len(downloaded_paper_ids)} existing + "
+            f"{self.paper_counter} new papers = {total_papers} total."
+        )
 
-        self.aggregate_abstracts_by_year(self.start_year, self.target_year)
+        # Agregação incremental otimizada
+        affected_years = self._get_affected_years(self.paper_counter)
+        self.aggregate_abstracts_incremental(affected_years)
 
         elapsed_time = time.time() - start_time
         minutes, seconds = divmod(int(elapsed_time), 60)
         self.logger.info(f"Total time spent in data collection: {minutes} min {seconds} sec")
 
-        return
+        return self.paper_counter
 
     @staticmethod
     def setup_logger(name: str = "logger", log_level: int = logging.INFO,
@@ -266,5 +424,10 @@ class DataCollection:
 
 
 if __name__ == '__main__':
-    data_collection_module = DataCollection(disease_name="acute myeloid leukemia", start_year=2024, target_year=datetime.now().year, expand_synonyms=True)
+    data_collection_module = DataCollection(
+        disease_name="acute myeloid leukemia",
+        start_year=2024,
+        target_year=datetime.now().year,
+        expand_synonyms=True
+    )
     data_collection_module.run()
