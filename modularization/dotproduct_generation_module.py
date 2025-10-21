@@ -68,9 +68,9 @@ class ValidationModule:
         
         # Configurar caminhos
         self.base_path = Path('.') / 'data' / self.disease_name
-        self.combination = '15' if self.model_type == 'w2v' else '16'
+        self.combination = 'w2v_models' if self.model_type == 'w2v' else 'ft_models'
         
-        self.model_directory = self.base_path / 'models' / f'{self.model_type}_combination{self.combination}'
+        self.model_directory = self.base_path / 'models' / self.combination
         self.validation_path = self.base_path / 'validation' / self.model_type / 'compound_history'
         self.compound_list_path = self.base_path / 'corpus' / 'compounds_in_corpus.txt'
         self.whitelist_cache_path = Path('./data/compound_whitelist.txt')
@@ -251,7 +251,7 @@ class ValidationModule:
         if year in self._models_cache:
             return self._models_cache[year]
         
-        model_path = self.model_directory / f'model_{self.start_year}_{year}.model'
+        model_path = self.model_directory / f'model_{self.start_year}_{year}_optuna_best.model'
         
         if not model_path.exists():
             return None
