@@ -11,6 +11,9 @@ from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from utils import *
 
+import warnings
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API", category=UserWarning)
+
 
 class EmbeddingCallback(CallbackAny2Vec):
     """Callback para monitorar treinamento."""
@@ -112,15 +115,13 @@ class EmbeddingTraining:
         self.min_corpus_size = 10
         self.workers = 4
         
-        # Configurar caminhos
-        self.base_path = Path('.') / 'data' / self.disease_name
-        self.corpus_path = self.base_path / 'corpus' / 'clean_abstracts' / 'clean_abstracts.csv'
-        
-        # Caminhos para modelos
-        self.models_path = self.base_path / 'models'
-        self.w2v_path = self.models_path / 'w2v_models'
-        self.ft_path = self.models_path / 'ft_models'
-        self.optuna_path = self.models_path / 'optuna_studies'
+        # Paths
+        self.base_path = Path(f'./data/{self.disease_name}')
+        self.corpus_path = Path(f'{self.base_path}/corpus/clean_abstracts/clean_abstracts.csv')
+        self.models_path = Path(f'{self.base_path}/models')
+        self.w2v_path = Path(f'{self.models_path}/w2v_models')
+        self.ft_path = Path(f'{self.models_path}/ft_models')
+        self.optuna_path = Path(f'{self.models_path}/optuna_studies')
         
         # Criar diretórios
         self.w2v_path.mkdir(parents=True, exist_ok=True)
@@ -254,18 +255,16 @@ class EmbeddingTraining:
         # Retornar score negativo (queremos maximizar similaridade)
         return -total_score / valid_words
 
-    def _get_model_path(self, param_idx: int = 0, suffix: str = "") -> Path:
+    def _get_model_path(self, param_idx: int = 0) -> Path:
         """Retorna o caminho para salvar o modelo."""
         base_path = self.w2v_path if self.model_type == 'w2v' else self.ft_path
         
         model_name = f"model_{self.start_year}_{self.end_year}"
         
-        if suffix:
-            model_name += f"_{suffix}"
-        elif len(self.parameters) > 1:
-            model_name += f"_params{param_idx}"
+        """if len(self.parameters) > 1:
+            model_name += f"_params{param_idx}"""
         
-        return base_path / f"{model_name}.model"
+        return Path(f'{base_path}/{model_name}.model')
 
     def _objective(self, trial: Trial, sentences: List[List[str]], 
                    val_sentences: Optional[List[List[str]]]) -> float:
@@ -368,7 +367,7 @@ class EmbeddingTraining:
         
         # Criar estudo Optuna
         study_name = f"{self.model_type}_{self.disease_name}_{self.start_year}_{self.end_year}"
-        storage_path = self.optuna_path / f"{study_name}.db"
+        storage_path = Path(f'{self.optuna_path}/{study_name}.db')
         
         study = optuna.create_study(
             study_name=study_name,
@@ -392,7 +391,7 @@ class EmbeddingTraining:
         best_params = study.best_params
         best_value = study.best_value
         
-        self.logger.info(f"\n{'='*60}")
+        self.logger.info(f"{'='*60}")
         self.logger.info(f"Optimization Complete!")
         self.logger.info(f"Best value: {best_value:.4f}")
         self.logger.info(f"Best parameters:")
@@ -401,7 +400,7 @@ class EmbeddingTraining:
         self.logger.info(f"{'='*60}\n")
         
         # Salvar resumo
-        summary_path = self.optuna_path / f"{study_name}_summary.txt"
+        summary_path = Path(f'{self.optuna_path}/{study_name}_summary.txt')
         with open(summary_path, 'w') as f:
             f.write(f"Optuna Study Summary\n")
             f.write(f"{'='*60}\n")
@@ -472,7 +471,8 @@ class EmbeddingTraining:
                 model = FastText(**common_params)
             
             # Salvar modelo
-            model_path = self._get_model_path(param_idx, suffix)
+            model_path = self._get_model_path(param_idx)
+            self.logger.info(f'MODEL PATH: {model_path}')
             model.save(str(model_path))
             
             # Informações do modelo
@@ -522,14 +522,14 @@ class EmbeddingTraining:
         # Treinar modelos para cada combinação de parâmetros
         models = {}
         for idx, params in enumerate(self.parameters):
-            self.logger.info(f"\n=== Training model {idx + 1}/{len(self.parameters)} ===")
+            self.logger.info(f"=== Training model {idx + 1}/{len(self.parameters)} ===")
             
             suffix = "optuna_best" if self.use_optuna and idx == 0 else ""
             model = self._train_single_model(sentences, params, idx, suffix)
             if model:
                 models[idx] = model
         
-        self.logger.info(f"\nTraining complete. {len(models)} models trained successfully.")
+        self.logger.info(f"Training complete. {len(models)} models trained successfully.")
         return models
 
     def train_year_over_year(self, step: int = 1) -> Dict[int, Dict[int, object]]:
@@ -647,20 +647,10 @@ if __name__ == '__main__':
         end_year=2025,
         model_type='w2v',
         use_optuna=True,
-        optuna_trials=30,
-        optuna_timeout=3600  # 1 hora
+        optuna_trials=2,
+        optuna_timeout=3600
     )
     
     success = trainer_optuna.run(year_over_year=False)
-    
-    # Exemplo 2: Treinar com parâmetros fixos
-    # trainer_fixed = EmbeddingTraining(
-    #     disease_name="acute myeloid leukemia",
-    #     start_year=2024,
-    #     end_year=2025,
-    #     model_type='w2v',
-    #     use_optuna=False
-    # )
-    # success = trainer_fixed.run(year_over_year=True)
     
     exit(0 if success else 1)

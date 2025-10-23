@@ -14,6 +14,10 @@ from Bio import Entrez
 from nltk.tokenize import word_tokenize
 from utils import *
 
+import warnings
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API", category=UserWarning)
+
+
 
 class Preprocessing:
     def __init__(self, disease_name: str, relevant_spacy_entity_types: Optional[List[str]] = None,
@@ -30,9 +34,18 @@ class Preprocessing:
         self.target_year = target_year
         self.incremental = incremental
 
+        #Paths
         self.data_dir = Path(f"./data/{self.disease_name}/corpus")
         self.output_csv = Path(f"{self.data_dir}/ner_table.csv")
         self.input_file = Path(f"{self.data_dir}/aggregated_abstracts/aggregated_corpus.txt")
+        self.clean_papers_path = Path(f'./data/{self.disease_name}/corpus/clean_abstracts')
+        self.aggregated_abstracts_path = Path(f'./data/{self.disease_name}/corpus/aggregated_abstracts')
+        self.processed_years_file = Path(f'{self.clean_papers_path}/processed_years.txt')
+
+        self.filepaths = {
+            "CID-Title.gz": Path("./data/pubchem_data/CID-Title"),
+            "CID-Synonym-filtered.gz": Path("./data/pubchem_data/CID-Synonym-filtered"),
+        }
 
         self.nlp = None
         self.load_spacy_model()
@@ -43,12 +56,7 @@ class Preprocessing:
         Entrez.api_key = self.api_key
 
         self._download_nltk_resources()
-
-        # Caminhos otimizados para processamento incremental
-        self.clean_papers_path = Path(f'./data/{self.disease_name}/corpus/clean_abstracts')
-        self.aggregated_abstracts_path = Path(f'./data/{self.disease_name}/corpus/aggregated_abstracts')
-        self.processed_years_file = self.clean_papers_path / 'processed_years.txt'
-
+        
         # Configurações padrão
         self.nature_filtered_words = frozenset([
             'foreword', 'prelude', 'commentary', 'workshop', 'conference', 'symposium',
@@ -61,11 +69,7 @@ class Preprocessing:
         self._stopwords = None
         self.base_url = "https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/"
 
-        self.filepaths = {
-            "CID-Title.gz": Path("data/pubchem_data/CID-Title"),
-            "CID-Synonym-filtered.gz": Path("data/pubchem_data/CID-Synonym-filtered"),
-        }
-
+        
     def _compile_regex_patterns(self) -> Dict[str, re.Pattern]:
         """Compila todos os regex patterns uma única vez."""
         return {
@@ -138,6 +142,16 @@ class Preprocessing:
         
         return sorted(years_to_process)
 
+    def _extract_year_from_filename(self, file_path: Path) -> Optional[int]:
+        """Extrai ano do nome do arquivo results_file_XXXX.txt"""
+        try:
+            # Padrão: results_file_2020.txt -> 2020
+            year_str = file_path.stem.split('_')[-1]
+            return int(year_str)
+        except (ValueError, IndexError):
+            self.logger.warning(f"Could not extract year from filename: {file_path.name}")
+            return None
+
     # ============================================
     # -------------- NER Extraction --------------
     # ============================================
@@ -184,7 +198,7 @@ class Preprocessing:
             # Processar apenas anos específicos
             all_texts = []
             for year in years:
-                year_file = self.aggregated_abstracts_path / f'results_file_{year}.txt'
+                year_file = Path(f'{self.aggregated_abstracts_path}/results_file_{year}.txt')
                 texts = self._read_abstracts_from_file(year_file)
                 self.logger.info(f"Read {len(texts)} abstracts from year {year}")
                 all_texts.extend(texts)
@@ -349,15 +363,16 @@ class Preprocessing:
         return df
 
     def _process_year_summaries(self, year: int, chunk_size: int = 10000) -> pd.DataFrame:
-        """Processa summaries de um ano específico."""
-        year_file = self.aggregated_abstracts_path / f'results_file_{year}.txt'
-        
+        """Processa summaries de um ano específico e mantém o campo year_extracted corretamente."""
+        year_file = Path(f'{self.aggregated_abstracts_path}/results_file_{year}.txt')
+
         if not year_file.exists():
             self.logger.warning(f"File not found: {year_file}")
             return pd.DataFrame()
-        
+
         self.logger.info(f"Processing year {year}...")
-        
+
+        # Lê os summaries do arquivo do ano
         summaries = []
         with open(year_file, 'r', encoding='utf-8') as f:
             for line in f:
@@ -367,33 +382,42 @@ class Preprocessing:
                 parts = line.split('|', 1)
                 summary = parts[1] if len(parts) == 2 else parts[0]
                 summaries.append(summary)
-        
+
         df = pd.DataFrame({'summary': summaries})
-        
-        # Preprocessing
+        df['year_extracted'] = year
+
+        # Limpeza inicial
         self.logger.info(f"Cleaning {len(df)} summaries from year {year}...")
         df['summary'] = df['summary'].apply(self._summary_preprocessing_pandas)
-        df = df[df['summary'].str.len() > 0]
-        
+        df = df[df['summary'].str.len() > 0].copy()
+
         # Tokenização
         df['words'] = df['summary'].str.split()
-        df_exploded = df.explode('words').rename(columns={'words': 'word'})[['word']].copy()
-        
+
+        # Explode mantendo o índice do resumo original
+        df_exploded = df.explode('words').rename(columns={'words': 'word'}).reset_index(drop=False)
+
         # Limpeza de palavras
-        df_exploded = self._words_preprocessing_pandas(df_exploded)
-        
-        # Reagrupar
-        df_clean = df_exploded.groupby(df_exploded.index)['word'].apply(lambda x: ' '.join(x)).reset_index()
-        df_clean.columns = ['original_index', 'summary']
-        
-        # Filtrar
+        df_exploded['word'] = df_exploded['word'].replace(self.typo_corrections)
+        df_exploded['word'] = df_exploded['word'].apply(self._clean_word)
+        df_exploded = df_exploded[df_exploded['word'].str.len() > 1]
+
+        # Reagrupar de volta por índice original
+        df_clean = (
+            df_exploded.groupby('index', as_index=False)
+            .agg({
+                'word': lambda x: ' '.join(x),
+                'year_extracted': 'first'
+            })
+            .rename(columns={'word': 'summary'})
+        )
+
+        # Filtros finais
         df_clean = df_clean[df_clean['summary'].str.len() > 10]
-        df_clean = df_clean.drop_duplicates(subset='summary', keep='first')
-        df_clean = df_clean[['summary']].reset_index(drop=True)
-        
+        df_clean = df_clean.drop_duplicates(subset='summary', keep='first').reset_index(drop=True)
+
         self.logger.info(f"Year {year}: {len(df_clean)} clean abstracts")
-        
-        return df_clean
+        return df_clean[['summary', 'year_extracted']]
 
     def clean_and_normalize_incremental(self, years_to_process: Optional[List[int]] = None):
         """Limpa e normaliza abstracts de forma incremental."""
@@ -425,19 +449,25 @@ class Preprocessing:
         df_new = df_new.drop_duplicates(subset='summary', keep='first')
         
         # Arquivo de saída principal
-        output_file = self.clean_papers_path / 'clean_abstracts.csv'
+        output_file = Path(f'{self.clean_papers_path}/clean_abstracts.csv')
         
         if output_file.exists() and self.incremental:
             # Modo incremental: carregar existente e combinar
             self.logger.info("Loading existing clean abstracts...")
             df_existing = pd.read_csv(output_file)
             
-            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-            df_combined = df_combined.drop_duplicates(subset='summary', keep='first')
-            
-            self.logger.info(f"Combined: {len(df_existing)} existing + {len(df_new)} new = {len(df_combined)} total")
-            
-            df_combined.to_csv(output_file, index=False)
+            # Garantir que df_existing tem year_extracted
+            if 'year_extracted' not in df_existing.columns:
+                self.logger.warning("Existing data missing year_extracted column. Cannot merge properly.")
+                self.logger.info("Saving new data separately...")
+                df_new.to_csv(output_file, index=False)
+            else:
+                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+                df_combined = df_combined.drop_duplicates(subset='summary', keep='first')
+                
+                self.logger.info(f"Combined: {len(df_existing)} existing + {len(df_new)} new = {len(df_combined)} total")
+                
+                df_combined.to_csv(output_file, index=False)
         else:
             # Primeira execução ou modo full
             self.logger.info(f"Saving {len(df_new)} clean abstracts...")
@@ -456,10 +486,13 @@ class Preprocessing:
             self.logger.error(f"No .txt files found in {self.aggregated_abstracts_path}")
             return
         
-        all_summaries = []
+        all_data = []
         
         for txt_file in txt_files:
             self.logger.info(f"Reading {txt_file.name}...")
+            
+            # Extrair ano do nome do arquivo
+            year = self._extract_year_from_filename(txt_file)
             
             chunk_data = []
             with open(txt_file, 'r', encoding='utf-8') as f:
@@ -470,16 +503,16 @@ class Preprocessing:
                     
                     parts = line.split('|', 1)
                     summary = parts[1] if len(parts) == 2 else parts[0]
-                    chunk_data.append(summary)
+                    chunk_data.append({'summary': summary, 'year_extracted': year})
                     
                     if len(chunk_data) >= chunk_size:
-                        all_summaries.extend(chunk_data)
+                        all_data.extend(chunk_data)
                         chunk_data = []
                 
                 if chunk_data:
-                    all_summaries.extend(chunk_data)
+                    all_data.extend(chunk_data)
         
-        df = pd.DataFrame({'summary': all_summaries})
+        df = pd.DataFrame(all_data)
         self.logger.info(f"Loaded {len(df)} abstracts")
 
         # Preprocessing vetorizado
@@ -490,27 +523,34 @@ class Preprocessing:
         # Tokenização
         self.logger.info("Tokenizing...")
         df['words'] = df['summary'].str.split()
-        df_exploded = df.explode('words').rename(columns={'words': 'word'})[['word']].copy()
+        df_exploded = df.explode('words').rename(columns={'words': 'word'})
+        
+        # Preservar year_extracted
+        df_exploded = df_exploded[['word', 'year_extracted']].copy()
 
         # Limpeza de palavras
         self.logger.info("Cleaning words...")
         df_exploded = self._words_preprocessing_pandas(df_exploded)
 
-        # Reagrupar
+        # Reagrupar mantendo year_extracted
         self.logger.info("Regrouping...")
-        df_clean = df_exploded.groupby(df_exploded.index)['word'].apply(lambda x: ' '.join(x)).reset_index()
-        df_clean.columns = ['original_index', 'summary']
+        df_clean = df_exploded.groupby(df_exploded.index).agg({
+            'word': lambda x: ' '.join(x),
+            'year_extracted': 'first'
+        }).reset_index(drop=True)
+        
+        df_clean.columns = ['summary', 'year_extracted']
         
         df_clean = df_clean[df_clean['summary'].str.len() > 10]
         df_clean = df_clean.drop_duplicates(subset='summary', keep='first')
-        df_clean = df_clean[['summary']].reset_index(drop=True)
+        df_clean = df_clean[['summary', 'year_extracted']].reset_index(drop=True)
 
         # Salvar
         self.logger.info('Saving clean abstracts...')
         self.clean_papers_path.mkdir(parents=True, exist_ok=True)
-        output_file = self.clean_papers_path / 'clean_abstracts.csv'
+        output_file = Path(f'{self.clean_papers_path}/clean_abstracts.csv')
         
-        df_clean.to_csv(output_file, index=False, chunksize=10000)
+        df_clean.to_csv(output_file, index=False)
 
         self.logger.info(f'Full cleaning completed. Saved {len(df_clean)} clean abstracts to {output_file}')
 
@@ -609,7 +649,6 @@ class Preprocessing:
             else:
                 self.clean_and_normalize_incremental(years_to_process)
             
-            self.logger.info("=== Pipeline completed successfully ===")
             return True
             
         except Exception as e:
@@ -618,13 +657,10 @@ class Preprocessing:
 
 
 if __name__ == "__main__":
-    os.chdir(Path(__file__).resolve().parent.parent)
 
-    # Modo incremental (padrão)
     preprocessing_module = Preprocessing(
         disease_name="acute myeloid leukemia",
-        target_year=2024,  # Processar especificamente 2024
-        incremental=True   # Usar modo incremental
+        incremental=True
     )
     
     # Para forçar processamento completo: force_full=True

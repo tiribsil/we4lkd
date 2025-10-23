@@ -10,8 +10,6 @@ from functools import lru_cache
 from utils import *
 import warnings
 
-
-
 class ValidationModule:
     """
     Module for validating embedding models by computing similarities
@@ -50,7 +48,7 @@ class ValidationModule:
             biomolecule_blacklist: Set of generic molecules to exclude
         """
         self.logger = setup_logger("validation", log_to_file=False)
-        warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
+        warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API", category=UserWarning)
         
         self.disease_name = normalize_disease_name(disease_name)
         self.start_year = start_year
@@ -66,14 +64,15 @@ class ValidationModule:
             else self.DEFAULT_BIOMOLECULE_BLACKLIST
         )
         
-        # Configurar caminhos
-        self.base_path = Path('.') / 'data' / self.disease_name
-        self.combination = 'w2v_models' if self.model_type == 'w2v' else 'ft_models'
-        
-        self.model_directory = self.base_path / 'models' / self.combination
-        self.validation_path = self.base_path / 'validation' / self.model_type / 'compound_history'
-        self.compound_list_path = self.base_path / 'corpus' / 'compounds_in_corpus.txt'
+        # Paths
+        self.base_path = Path(f'./data/{self.disease_name}') 
+    
+        self.model_directory = Path(f'{self.base_path}/models/{self.model_type}_models')
+        self.validation_path = Path(f'{self.base_path}/validation/{self.model_type}/compound_history')
+        self.compound_list_path = Path(f'{self.base_path}/corpus/compounds_in_corpus.txt')
         self.whitelist_cache_path = Path('./data/compound_whitelist.txt')
+        self.synonyms_path = Path('./data/pubchem_data/CID-Synonym-filtered/CID-Synonym-filtered')
+        self.titles_path = Path('./data/pubchem_data/CID-Title/CID-Title')
         
         # Criar diretórios
         self.validation_path.mkdir(parents=True, exist_ok=True)
@@ -126,10 +125,9 @@ class ValidationModule:
 
     def _load_pubchem_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Carrega dados do PubChem."""
-        synonyms_path = Path('./data/pubchem_data/CID-Synonym-filtered/CID-Synonym-filtered')
-        titles_path = Path('./data/pubchem_data/CID-Title/CID-Title')
         
-        if not synonyms_path.exists() or not titles_path.exists():
+        
+        if not self.synonyms_path.exists() or not self.titles_path.exists():
             raise FileNotFoundError(
                 f"PubChem data not found. Please run preprocessing first."
             )
@@ -138,7 +136,7 @@ class ValidationModule:
         
         # Usar dtypes específicos para economizar memória
         synonyms_df = pd.read_csv(
-            synonyms_path,
+            self.synonyms_path,
             sep='\t',
             header=None,
             names=['cid', 'synonym'],
@@ -146,7 +144,7 @@ class ValidationModule:
         )
         
         titles_df = pd.read_csv(
-            titles_path,
+            self.titles_path,
             sep='\t',
             header=None,
             names=['cid', 'title'],
@@ -251,7 +249,7 @@ class ValidationModule:
         if year in self._models_cache:
             return self._models_cache[year]
         
-        model_path = self.model_directory / f'model_{self.start_year}_{year}_optuna_best.model'
+        model_path = Path(f'{self.model_directory}/model_{self.start_year}_{year}.model')
         
         if not model_path.exists():
             return None
@@ -315,7 +313,7 @@ class ValidationModule:
 
     def _filter_compounds_by_vocab(self, compounds: Set[str]) -> List[str]:
         """Filtra compostos presentes no vocabulário do modelo final."""
-        final_model_path = self.model_directory / f'model_{self.start_year}_{self.end_year}.model'
+        final_model_path = Path(f'{self.model_directory}/model_{self.start_year}_{self.end_year}.model')
         
         if not final_model_path.exists():
             self.logger.warning(f"Final model not found at {final_model_path}")
@@ -384,36 +382,32 @@ class ValidationModule:
             'euclidean_distance': float(euclidean_distance)
         }
 
-    def _compute_derived_metrics(
-        self,
-        compound_data: Dict[str, List[float]]
-    ) -> Dict[str, List[float]]:
+    def _compute_derived_metrics(self, compound_data: Dict[str, List[float]]) -> Dict[str, List[float]]:
         """
-        Calcula métricas derivadas (delta e score).
-        
-        Args:
-            compound_data: Dict com year, normalized_dot_product, euclidean_distance
-        
-        Returns:
-            Dict atualizado com delta e score
+        Calcula métricas derivadas (delta e score) para um composto.
+        Funciona mesmo se houver apenas um ano de dados.
         """
-        normalized_values = np.array(compound_data['normalized_dot_product'])
-        euclidean_distances = np.array(compound_data['euclidean_distance'])
+        normalized_values = np.array(compound_data.get("normalized_dot_product", []), dtype=float)
+        euclidean_distances = np.array(compound_data.get("euclidean_distance", []), dtype=float)
         
         # Delta normalized dot product
-        if len(normalized_values) > 0:
-            delta_values = np.diff(normalized_values, prepend=normalized_values[0])
-            compound_data['delta_normalized_dot_product'] = delta_values.tolist()
+        if len(normalized_values) > 1:
+            delta_values = np.insert(np.diff(normalized_values), 0, np.nan)
         else:
-            compound_data['delta_normalized_dot_product'] = []
+            # Apenas um ano → delta é NaN
+            delta_values = np.array([np.nan])
         
+        compound_data["delta_normalized_dot_product"] = delta_values.tolist()
+
         # Score combinado
-        if len(normalized_values) > 0 and len(delta_values) > 0:
-            score = normalized_values * (1 + delta_values) / (euclidean_distances + 1e-9)
-            compound_data['score'] = score.tolist()
+        if len(normalized_values) > 0 and len(euclidean_distances) > 0:
+            # Substituir NaN por 0 apenas para cálculo do score
+            safe_delta = np.nan_to_num(delta_values, nan=0.0)
+            score = normalized_values * (1 + safe_delta) / (euclidean_distances + 1e-9)
+            compound_data["score"] = score.tolist()
         else:
-            compound_data['score'] = []
-        
+            compound_data["score"] = []
+
         return compound_data
 
     def generate_compound_histories(self) -> bool:
@@ -443,7 +437,7 @@ class ValidationModule:
         # Inicializar dicionário para todos os compostos
         compound_histories = {}
         for compound in compounds:
-            key = f'{compound}_comb{self.combination}'
+            key = f'{compound}_{self.model_type}'
             compound_histories[key] = {
                 'year': [],
                 'dot_product': [],
@@ -486,7 +480,7 @@ class ValidationModule:
                 metrics = self._compute_metrics(compound_embedding, disease_embedding)
                 
                 # Armazenar
-                key = f'{compound}_comb{self.combination}'
+                key = f'{compound}_{self.model_type}'
                 compound_histories[key]['year'].append(year)
                 compound_histories[key]['dot_product'].append(metrics['dot_product'])
                 compound_histories[key]['normalized_dot_product'].append(
@@ -505,7 +499,7 @@ class ValidationModule:
         saved_count = 0
         
         for compound in compounds:
-            key = f'{compound}_comb{self.combination}'
+            key = f'{compound}_{self.model_type}'
             
             # Verificar se há dados
             if not compound_histories[key]['year']:
@@ -518,7 +512,7 @@ class ValidationModule:
             
             # Salvar CSV
             filename = self._sanitize_filename(key)
-            output_path = self.validation_path / f'{filename}.csv'
+            output_path = Path(f'{self.validation_path}/{filename}.csv')
             
             try:
                 df = pd.DataFrame(compound_histories[key])
@@ -574,7 +568,7 @@ class ValidationModule:
                     continue
                 
                 # Extrair nome do composto
-                compound_name = csv_file.stem.replace(f'_comb{self.combination}', '')
+                compound_name = csv_file.stem.replace(f'_{self.model_type}', '')
                 
                 all_data.append({
                     'compound': compound_name,
