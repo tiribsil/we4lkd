@@ -354,7 +354,7 @@ class LatentKnowledgeReportGenerator:
         # Caminho do diretório do último ano
         top_compounds_path = Path(f'{self.validation_path}/{self.model_type}/top_n_compounds/{str(end_year)}')
         score_files = list(top_compounds_path.glob(f'top_20_{metric}.csv'))
-        
+
         if not score_files:
             self.logger.warning(
                 f"Score file not found in '{top_compounds_path.resolve()}'. "
@@ -422,10 +422,6 @@ class LatentKnowledgeReportGenerator:
                     existing_topics = set(line.strip() for line in f if line.strip())
             else:
                 existing_topics = set()
-
-            if len(existing_topics) >= max_topics:
-                self.logger.info(f"Topics file already has {len(existing_topics)} entries (>= {max_topics}). Skipping feedback.")
-                return
 
             # Ler novos tratamentos potenciais
             with open(potential_treatments_file, 'r', encoding='utf-8') as f:

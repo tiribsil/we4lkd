@@ -11,17 +11,16 @@ if __name__ == '__main__':
 
     disease = 'acute myeloid leukemia'
     model_type = 'w2v'
-    optuna_trials = 10 #quantas vezes o optuna vai rodar o modelo para encontrar os melhores hiperparâmetros -quanto maior o valor, mais tempo demora, mas melhor fica o modelo final
+    optuna_trials = 2 #quantas vezes o optuna vai rodar o modelo para encontrar os melhores hiperparâmetros -quanto maior o valor, mais tempo demora, mas melhor fica o modelo final
 
     for current_year in range(start_year, end_year + 1):
-        print(f"\n{'='*20} Processing year: {current_year} {'='*20}")
+        print(f"{'='*20} Processing year: {current_year} {'='*20}")
 
         data_collection_module = DataCollection(
-            disease_name=disease,
-            start_year=start_year,
-            target_year=current_year,
-            expand_synonyms=True
-        )
+        disease_name="acute myeloid leukemia",
+        target_year=current_year,
+        expand_synonyms=True,
+        filter_synonyms=True)
 
         data_collection_module.run()
 
@@ -38,7 +37,7 @@ if __name__ == '__main__':
             end_year=current_year,
             model_type=model_type,
             use_optuna=True,
-            optuna_trials=2,
+            optuna_trials=optuna_trials,
             optuna_timeout=3600
         )
         
