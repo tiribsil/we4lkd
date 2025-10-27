@@ -17,7 +17,63 @@ from utils import *
 import warnings
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API", category=UserWarning)
 
+import pyspark.sql.functions as F
+from pyspark.sql.session import SparkSession
+from pyspark.sql.window import Window
+from pyspark.sql.types import StringType
+import pyspark.sql # Added to resolve NameError for pyspark.sql.DataFrame
 
+# UDF helper function for summary preprocessing
+@F.udf(returnType=StringType())
+def spark_summary_preprocessing_udf(text: str, html_tags_pattern: str, urls_pattern: str, punctuation_pattern: str, whitespace_pattern: str, disease_regex_pattern: Optional[str], canonical_name: str) -> str:
+    if text is None or not text:
+        return ""
+    
+    text = str(text).strip()
+    text = re.sub(html_tags_pattern, '', text)
+    text = re.sub(urls_pattern, '', text)
+    text = re.sub(punctuation_pattern, '', text)
+    text = re.sub(whitespace_pattern, ' ', text)
+    
+    if disease_regex_pattern:
+        text = re.sub(disease_regex_pattern, canonical_name, text)
+    
+    return text.lower()
+
+# UDF helper function for word cleaning
+@F.udf(returnType=StringType())
+def spark_clean_word_udf(word: str, stopwords_list: List[str], units_pattern: str) -> str:
+    if not word or len(word) <= 1:
+        return ''
+    
+    word_lower = word.lower()
+    
+    if word_lower in stopwords_list:
+        return ''
+    
+    word_clean = re.sub(units_pattern, '', word_lower).strip()
+    
+    return word_clean if len(word_clean) > 1 else ''
+
+spark_session = None
+
+def get_spark_session() -> SparkSession:
+    """Initializes and returns a SparkSession."""
+    global spark_session
+    if spark_session is None:
+        print("Initializing SparkSession...")
+        spark_session = SparkSession.builder \
+            .appName("PreprocessingPipeline") \
+            .config("spark.executor.memory", "16g") \
+            .config("spark.driver.memory", "8g") \
+            .config("spark.driver.maxResultSize", "4g") \
+            .config("spark.sql.shuffle.partitions", "200") \
+            .config("spark.sql.adaptive.enabled", "true") \
+            .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+            .config("spark.local.dir", "/tmp/spark-temp") \
+            .getOrCreate()
+        print("SparkSession initialized.")
+    return spark_session
 
 class Preprocessing:
     def __init__(self, disease_name: str, relevant_spacy_entity_types: Optional[List[str]] = None,
@@ -33,6 +89,9 @@ class Preprocessing:
         self.batch_size = 1000
         self.target_year = target_year
         self.incremental = incremental
+
+        # Spark Session
+        self.spark = self._init_spark_session()
 
         #Paths
         self.data_dir = Path(f"./data/{self.disease_name}/corpus")
@@ -72,14 +131,14 @@ class Preprocessing:
         self.base_url = "https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/"
 
         
-    def _compile_regex_patterns(self) -> Dict[str, re.Pattern]:
-        """Compila todos os regex patterns uma única vez."""
+    def _compile_regex_patterns(self) -> Dict[str, str]:
+        """Compila todos os regex patterns uma única vez e retorna como strings."""
         return {
-            'html_tags': re.compile(r'<[^>]+>'),
-            'urls': re.compile(r'https?://\S+'),
-            'punctuation': re.compile(r'[;:\(\)\[\]\{\}.,"!#$&\'*?@\\\^`|~]'),
-            'whitespace': re.compile(r'\s+'),
-            'units': re.compile('(%s)' % '|'.join(map(re.escape, self.units_and_symbols_list)))
+            'html_tags': r'<[^>]+>',
+            'urls': r'https?://\S+',
+            'punctuation': r'[;:\(\)\[\]\{\}.,"!#$&\'*?@\\\^`|~]',
+            'whitespace': r'\s+',
+            'units': r'(%s)' % '|'.join(map(re.escape, self.units_and_symbols_list))
         }
 
     @property
@@ -326,175 +385,192 @@ class Preprocessing:
         return None, ""
 
     def _create_compound_replacement_map(self) -> List[Tuple[str, str]]:
-        """Creates a sorted list of (term, replacement) for compound normalization."""
+        """Creates a sorted list of (term, replacement) for compound normalization using PySpark."""
         if self._compound_replacement_map is not None:
             return self._compound_replacement_map
 
-        self.logger.info("Creating compound replacement map...")
+        self.logger.info("Creating compound replacement map using PySpark...")
 
         # Define paths for PubChem data
-        synonyms_path = self.cid_synonym_filtered_file
-        titles_path = self.cid_title_file
-        ner_table_path = self.output_csv
+        synonyms_path = str(self.cid_synonym_filtered_file)
+        titles_path = str(self.cid_title_file)
+        ner_table_path = str(self.output_csv)
+        whitelist_path = str(Path(f'./data/compound_whitelist.txt'))
 
         # Check for required files
-        if not all([synonyms_path.exists(), titles_path.exists(), ner_table_path.exists()]):
-            self.logger.warning("Missing required files for compound normalization (synonyms, titles, or NER table). Skipping.")
+        if not all([Path(synonyms_path).exists(), Path(titles_path).exists(), Path(ner_table_path).exists(), Path(whitelist_path).exists()]):
+            self.logger.warning("Missing required files for compound normalization (synonyms, titles, NER table, or whitelist). Skipping.")
             return []
 
-        # Read data using Pandas
         try:
-            synonyms_df = pd.read_csv(synonyms_path, sep='\t', header=None, names=['cid', 'synonym'], on_bad_lines='warn')
-            titles_df = pd.read_csv(titles_path, sep='\t', header=None, names=['cid', 'title'], on_bad_lines='warn')
-            ner_df = pd.read_csv(ner_table_path)
+            # Read data using Spark
+            synonyms_df_spark = self.spark.read.option("sep", "\t").csv(synonyms_path).toDF('cid', 'synonym')
+            titles_df_spark = self.spark.read.option("sep", "\t").csv(titles_path).toDF('cid', 'title')
+            ner_df_spark = self.spark.read.option("header", "true").option("sep", ",").csv(ner_table_path)
+            whitelist_df_spark = self.spark.read.option("header", "false").option("sep", "\n").csv(whitelist_path).toDF('term')
         except Exception as e:
-            self.logger.error(f"Error reading data for compound map: {e}")
+            self.logger.error(f"Error reading data for compound map with Spark: {e}")
             return []
 
         # Create the full compound map
-        compound_map_df = pd.merge(synonyms_df, titles_df, on='cid')
-        compound_map_df['replacement'] = compound_map_df['title'].str.lower().str.replace(r'\s+', '', regex=True)
-        compound_map_df['term'] = compound_map_df['synonym'].str.lower()
-        compound_map_df = compound_map_df[['term', 'replacement']].dropna()
-        compound_map_df = compound_map_df[compound_map_df['term'].str.len() > 1]
-        compound_map_df = compound_map_df[compound_map_df['term'] != compound_map_df['replacement']]
-        compound_map_df = compound_map_df.drop_duplicates()
+        compound_map_df_spark = synonyms_df_spark.join(titles_df_spark, "cid") \
+            .withColumn("replacement", F.regexp_replace(F.lower(F.col("title")), r'\\s+', '')) \
+            .select(F.lower(F.col("synonym")).alias("term"), "replacement") \
+            .where(F.length(F.trim(F.col("term"))) > 1) \
+            .where(F.col("term") != F.col("replacement")) \
+            .distinct()
 
-        # Filter map using terms from the NER table
-        self.logger.info("Filtering compound map using NER table...")
-        corpus_chemical_terms = set(ner_df['token'].str.lower().unique())
-        filtered_map_df = compound_map_df[compound_map_df['term'].isin(corpus_chemical_terms)]
+        # Filter map using terms from the NER table AND compound whitelist
+        self.logger.info("Filtering compound map using NER table and compound whitelist...")
+        corpus_chemical_terms_spark = ner_df_spark.select(F.lower(F.col('token')).alias('ner_term')).distinct()
+        
+        # Union with whitelist terms
+        whitelist_terms_spark = whitelist_df_spark.select(F.lower(F.col('term')).alias('ner_term')).distinct()
+        all_chemical_terms_spark = corpus_chemical_terms_spark.unionByName(whitelist_terms_spark).distinct()
+
+        filtered_map_df_spark = compound_map_df_spark.join(
+            F.broadcast(all_chemical_terms_spark),
+            compound_map_df_spark.term == all_chemical_terms_spark.ner_term,
+            'inner'
+        ).select("term", "replacement")
 
         # Collect and sort the map by term length (descending)
-        replacement_list = list(filtered_map_df.itertuples(index=False, name=None))
+        self.logger.info("Collecting filtered compound map for replacement...")
+        compound_map_rows = filtered_map_df_spark.collect()
+        replacement_list = [(row.term, row.replacement) for row in compound_map_rows]
         replacement_list.sort(key=lambda x: len(x[0]), reverse=True)
 
         self.logger.info(f"Collected {len(replacement_list)} relevant compound terms for replacement.")
         self._compound_replacement_map = replacement_list
         return self._compound_replacement_map
 
-    def _replace_compounds_in_text(self, text: str, replacement_map: List[Tuple[str, str]]) -> str:
-        """Replaces compound synonyms in a single text."""
-        if not text or not replacement_map:
-            return text
-        for term, replacement in replacement_map:
-            pattern = r'(?i)\b' + re.escape(term) + r'\b'
-            text = re.sub(pattern, replacement, text)
-        return text
 
-    def _apply_compound_replacement(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Applies compound replacement to the 'summary' column of a DataFrame."""
-        replacement_map = self._create_compound_replacement_map()
-        if not replacement_map:
+
+    def _apply_compound_replacement(self, df: pyspark.sql.DataFrame) -> pyspark.sql.DataFrame:
+        """Applies compound replacement using a broadcasted list and a UDF, mirroring the more efficient old implementation."""
+        replacement_list = self._create_compound_replacement_map()
+        if not replacement_list:
             self.logger.warning("No compound replacement map available. Skipping replacement.")
             return df
 
-        self.logger.info("Applying compound synonym replacement...")
-        df['summary'] = df['summary'].apply(lambda x: self._replace_compounds_in_text(x, replacement_map))
+        self.logger.info(f"Applying {len(replacement_list)} compound synonym replacements using a broadcasted UDF...")
+
+        # Broadcast the list to make it efficiently available to the UDF on all executors.
+        broadcasted_replacements = self.spark.sparkContext.broadcast(replacement_list)
+
+        # Define a Python function to perform the series of replacements.
+        def replace_compounds_in_text(text: str) -> str:
+            if text is None:
+                return ''
+            # Access the broadcasted list of replacements.
+            for term, replacement in broadcasted_replacements.value:
+                # Use re.sub for case-insensitive, whole-word replacement.
+                pattern = r'(?i)\\b' + re.escape(term) + r'\\b'
+                text = re.sub(pattern, replacement, text)
+            return text
+
+        # Register the Python function as a Spark UDF.
+        replace_udf = F.udf(replace_compounds_in_text, StringType())
+
+        # Apply the UDF to the summary column.
+        return df.withColumn('summary', replace_udf(F.col('summary')))
+
+
+
+
+
+    def _words_preprocessing_spark(self, df: pyspark.sql.DataFrame) -> pyspark.sql.DataFrame:
+        """Preprocessamento de palavras usando operações PySpark."""
+        # Replace typo corrections
+        typo_corrections_broadcast = self.spark.sparkContext.broadcast(self.typo_corrections)
+
+        @F.udf(returnType=StringType())
+        def apply_typo_corrections_udf(word: str) -> str:
+            if word is None:
+                return ''
+            return typo_corrections_broadcast.value.get(word, word)
+
+        df = df.withColumn('word', apply_typo_corrections_udf(F.col('word')))
+
+        # Apply spark_clean_word_udf
+        df = df.withColumn('word', spark_clean_word_udf(
+            F.col('word'),
+            F.lit(list(self.stopwords)), # Pass stopwords as a list
+            F.lit(self._compiled_regex['units'])
+        ))
+        
+        # Filter words by length
+        df = df.filter(F.length(F.col('word')) > 1)
+        
         return df
 
-    def _summary_preprocessing_pandas(self, text: str) -> str:
-        """Preprocessing de texto usando regex pré-compilados."""
-        if pd.isna(text) or not text:
-            return ""
-        
-        text = str(text).strip()
-        text = self._compiled_regex['html_tags'].sub('', text)
-        text = self._compiled_regex['urls'].sub('', text)
-        text = self._compiled_regex['punctuation'].sub('', text)
-        text = self._compiled_regex['whitespace'].sub(' ', text)
-        
-        disease_regex, canonical_name = self._get_disease_regex()
-        if disease_regex:
-            text = disease_regex.sub(canonical_name, text)
-        
-        return text.lower()
+    def _process_year_summaries(self, year: int) -> pyspark.sql.DataFrame:
+        """Processa summaries de um ano específico e mantém o campo year_extracted corretamente usando PySpark."""
+        year_file = str(Path(f'{self.aggregated_abstracts_path}/results_file_{year}.txt'))
 
-    def _clean_word(self, word: str) -> str:
-        """Limpa uma palavra individual."""
-        if not word or len(word) <= 1:
-            return ''
-        
-        word_lower = word.lower()
-        
-        if word_lower in self.stopwords:
-            return ''
-        
-        word_clean = self._compiled_regex['units'].sub('', word_lower).strip()
-        
-        return word_clean if len(word_clean) > 1 else ''
-
-    def _words_preprocessing_pandas(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Preprocessamento de palavras usando operações vetorizadas."""
-        df['word'] = df['word'].replace(self.typo_corrections)
-        df['word'] = df['word'].apply(self._clean_word)
-        df = df[df['word'].str.len() > 1].copy()
-        
-        return df
-
-    def _process_year_summaries(self, year: int, chunk_size: int = 10000) -> pd.DataFrame:
-        """Processa summaries de um ano específico e mantém o campo year_extracted corretamente."""
-        year_file = Path(f'{self.aggregated_abstracts_path}/results_file_{year}.txt')
-
-        if not year_file.exists():
+        if not Path(year_file).exists():
             self.logger.warning(f"File not found: {year_file}")
-            return pd.DataFrame()
+            return self.spark.createDataFrame([], schema="summary STRING, year_extracted INT")
 
-        self.logger.info(f"Processing year {year}...")
+        self.logger.info(f"Processing year {year} using PySpark...")
 
-        # Lê os summaries do arquivo do ano
-        summaries = []
-        with open(year_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split('|', 1)
-                summary = parts[1] if len(parts) == 2 else parts[0]
-                summaries.append(summary)
+        # Read summaries from the year file using Spark
+        # Assuming the file format is "title|summary" or "summary"
+        df_raw = self.spark.read.option("sep", "|").csv(year_file).toDF('title_or_summary', 'summary_col')
 
-        df = pd.DataFrame({'summary': summaries})
-        df['year_extracted'] = year
+        # Determine if the file has a title column or just summaries
+        if 'summary_col' in df_raw.columns:
+            df = df_raw.withColumn('summary', F.col('summary_col'))
+        else:
+            df = df_raw.withColumn('summary', F.col('title_or_summary'))
+        
+        df = df.select('summary').withColumn('year_extracted', F.lit(year))
 
-        # Limpeza inicial
-        self.logger.info(f"Cleaning {len(df)} summaries from year {year}...")
-        df['summary'] = df['summary'].apply(self._summary_preprocessing_pandas)
-        df = df[df['summary'].str.len() > 0].copy()
+        # Initial cleaning
+        self.logger.info(f"Cleaning summaries from year {year} using PySpark...")
+        disease_regex, canonical_name = self._get_disease_regex()
+        df = df.withColumn('summary', spark_summary_preprocessing_udf(
+            F.col('summary'),
+            F.lit(self._compiled_regex['html_tags']),
+            F.lit(self._compiled_regex['urls']),
+            F.lit(self._compiled_regex['punctuation']),
+            F.lit(self._compiled_regex['whitespace']),
+            F.lit(disease_regex.pattern if disease_regex else None),
+            F.lit(canonical_name)
+        ))
+        df = df.filter(F.length(F.col('summary')) > 0)
 
-        # Aplicar normalização de compostos
+        # Apply compound normalization
         df = self._apply_compound_replacement(df)
 
-        # Tokenização
-        df['words'] = df['summary'].str.split()
+        # Tokenization
+        df = df.withColumn('words', F.split(F.col('summary'), ' '))
 
-        # Explode mantendo o índice do resumo original
-        df_exploded = df.explode('words').rename(columns={'words': 'word'}).reset_index(drop=False)
+        # Explode words, keeping original index for regrouping
+        # Add a unique ID to each row before exploding to simulate Pandas' reset_index(drop=False) behavior
+        df = df.withColumn("original_index", F.monotonically_increasing_id())
+        df_exploded = df.withColumn('word', F.explode('words')).select('original_index', 'word', 'year_extracted')
 
-        # Limpeza de palavras
-        df_exploded['word'] = df_exploded['word'].replace(self.typo_corrections)
-        df_exploded['word'] = df_exploded['word'].apply(self._clean_word)
-        df_exploded = df_exploded[df_exploded['word'].str.len() > 1]
+        # Word cleaning
+        df_exploded = self._words_preprocessing_spark(df_exploded)
 
-        # Reagrupar de volta por índice original
-        df_clean = (
-            df_exploded.groupby('index', as_index=False)
-            .agg({
-                'word': lambda x: ' '.join(x),
-                'year_extracted': 'first'
-            })
-            .rename(columns={'word': 'summary'})
-        )
+        # Regroup back by original index
+        window_spec = Window.partitionBy('original_index', 'year_extracted').orderBy('original_index')
+        df_clean = df_exploded.withColumn('summary_list', F.collect_list('word').over(window_spec)) \
+                              .groupBy('original_index', 'year_extracted') \
+                              .agg(F.concat_ws(' ', F.first('summary_list')).alias('summary')) \
+                              .select('summary', 'year_extracted')
 
-        # Filtros finais
-        df_clean = df_clean[df_clean['summary'].str.len() > 10]
-        df_clean = df_clean.drop_duplicates(subset='summary', keep='first').reset_index(drop=True)
+        # Final filters
+        df_clean = df_clean.filter(F.length(F.col('summary')) > 10)
+        df_clean = df_clean.dropDuplicates(subset=['summary'])
 
-        self.logger.info(f"Year {year}: {len(df_clean)} clean abstracts")
-        return df_clean[['summary', 'year_extracted']]
+        self.logger.info(f"Year {year}: {df_clean.count()} clean abstracts")
+        return df_clean.select('summary', 'year_extracted')
 
     def clean_and_normalize_incremental(self, years_to_process: Optional[List[int]] = None):
-        """Limpa e normaliza abstracts de forma incremental."""
-        self.logger.info('Initializing incremental abstract cleaning...')
+        """Limpa e normaliza abstracts de forma incremental usando PySpark."""
+        self.logger.info('Initializing incremental abstract cleaning using PySpark...')
         
         if years_to_process is None:
             years_to_process = self._get_years_to_process()
@@ -506,52 +582,55 @@ class Preprocessing:
         self.logger.info(f"Processing years: {years_to_process}")
         
         # Processar cada ano
-        yearly_results = []
+        yearly_results_spark = []
         for year in years_to_process:
-            df_year = self._process_year_summaries(year)
-            if not df_year.empty:
-                yearly_results.append(df_year)
+            df_year_spark = self._process_year_summaries(year)
+            if df_year_spark.count() > 0: # Check if DataFrame is not empty
+                yearly_results_spark.append(df_year_spark)
                 self._mark_year_as_processed(year)
         
-        if not yearly_results:
+        if not yearly_results_spark:
             self.logger.warning("No data processed from target years")
             return
         
         # Combinar novos resultados
-        df_new = pd.concat(yearly_results, ignore_index=True)
-        df_new = df_new.drop_duplicates(subset='summary', keep='first')
+        df_new_spark = yearly_results_spark[0]
+        for i in range(1, len(yearly_results_spark)):
+            df_new_spark = df_new_spark.unionByName(yearly_results_spark[i])
+        
+        df_new_spark = df_new_spark.dropDuplicates(subset=['summary'])
         
         # Arquivo de saída principal
-        output_file = Path(f'{self.clean_papers_path}/clean_abstracts.csv')
+        output_file = str(Path(f'{self.clean_papers_path}/clean_abstracts.csv'))
         
-        if output_file.exists() and self.incremental:
+        if Path(output_file).exists() and self.incremental:
             # Modo incremental: carregar existente e combinar
-            self.logger.info("Loading existing clean abstracts...")
-            df_existing = pd.read_csv(output_file)
+            self.logger.info("Loading existing clean abstracts with PySpark...")
+            df_existing_spark = self.spark.read.option("header", "true").option("sep", ",").csv(output_file)
             
             # Garantir que df_existing tem year_extracted
-            if 'year_extracted' not in df_existing.columns:
+            if 'year_extracted' not in df_existing_spark.columns:
                 self.logger.warning("Existing data missing year_extracted column. Cannot merge properly.")
                 self.logger.info("Saving new data separately...")
-                df_new.to_csv(output_file, index=False)
+                df_new_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(output_file)
             else:
-                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-                df_combined = df_combined.drop_duplicates(subset='summary', keep='first')
+                df_combined_spark = df_existing_spark.unionByName(df_new_spark)
+                df_combined_spark = df_combined_spark.dropDuplicates(subset=['summary'])
                 
-                self.logger.info(f"Combined: {len(df_existing)} existing + {len(df_new)} new = {len(df_combined)} total")
+                self.logger.info(f"Combined: {df_existing_spark.count()} existing + {df_new_spark.count()} new = {df_combined_spark.count()} total")
                 
-                df_combined.to_csv(output_file, index=False)
+                df_combined_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(output_file)
         else:
             # Primeira execução ou modo full
-            self.logger.info(f"Saving {len(df_new)} clean abstracts...")
+            self.logger.info(f"Saving {df_new_spark.count()} clean abstracts with PySpark...")
             self.clean_papers_path.mkdir(parents=True, exist_ok=True)
-            df_new.to_csv(output_file, index=False)
+            df_new_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(output_file)
         
         self.logger.info(f'Incremental cleaning completed. Output: {output_file}')
 
-    def clean_and_normalize(self, chunk_size: int = 10000):
-        """Limpa e normaliza abstracts usando processamento em chunks (modo full)."""
-        self.logger.info('Initializing full abstract cleaning...')
+    def clean_and_normalize(self):
+        """Limpa e normaliza abstracts usando PySpark (modo full)."""
+        self.logger.info('Initializing full abstract cleaning using PySpark...')
 
         txt_files = list(self.aggregated_abstracts_path.glob('*.txt'))
         
@@ -559,76 +638,83 @@ class Preprocessing:
             self.logger.error(f"No .txt files found in {self.aggregated_abstracts_path}")
             return
         
-        all_data = []
+        all_dfs_spark = []
         
         for txt_file in txt_files:
-            self.logger.info(f"Reading {txt_file.name}...")
+            self.logger.info(f"Reading {txt_file.name} with PySpark...")
             
-            # Extrair ano do nome do arquivo
+            # Extract year from filename
             year = self._extract_year_from_filename(txt_file)
             
-            chunk_data = []
-            with open(txt_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    
-                    parts = line.split('|', 1)
-                    summary = parts[1] if len(parts) == 2 else parts[0]
-                    chunk_data.append({'summary': summary, 'year_extracted': year})
-                    
-                    if len(chunk_data) >= chunk_size:
-                        all_data.extend(chunk_data)
-                        chunk_data = []
-                
-                if chunk_data:
-                    all_data.extend(chunk_data)
+            # Read summaries from the file using Spark
+            df_raw = self.spark.read.option("sep", "|").csv(str(txt_file)).toDF('title_or_summary', 'summary_col')
+
+            if 'summary_col' in df_raw.columns:
+                df = df_raw.withColumn('summary', F.col('summary_col'))
+            else:
+                df = df_raw.withColumn('summary', F.col('title_or_summary'))
+            
+            df = df.select('summary').withColumn('year_extracted', F.lit(year))
+            all_dfs_spark.append(df)
         
-        df = pd.DataFrame(all_data)
-        self.logger.info(f"Loaded {len(df)} abstracts")
+        if not all_dfs_spark:
+            self.logger.warning("No data loaded from aggregated abstracts.")
+            return
 
-        # Preprocessing vetorizado
-        self.logger.info("Cleaning summaries...")
-        df['summary'] = df['summary'].apply(self._summary_preprocessing_pandas)
-        df = df[df['summary'].str.len() > 0]
+        df_combined_spark = all_dfs_spark[0]
+        for i in range(1, len(all_dfs_spark)):
+            df_combined_spark = df_combined_spark.unionByName(all_dfs_spark[i])
 
-        # Aplicar normalização de compostos
-        df = self._apply_compound_replacement(df)
+        self.logger.info(f"Loaded {df_combined_spark.count()} abstracts")
 
-        # Tokenização
+        # Preprocessing vectorized
+        self.logger.info("Cleaning summaries using PySpark...")
+        disease_regex, canonical_name = self._get_disease_regex()
+        df_combined_spark = df_combined_spark.withColumn('summary', spark_summary_preprocessing_udf(
+            F.col('summary'),
+            F.lit(self._compiled_regex['html_tags']),
+            F.lit(self._compiled_regex['urls']),
+            F.lit(self._compiled_regex['punctuation']),
+            F.lit(self._compiled_regex['whitespace']),
+            F.lit(disease_regex.pattern if disease_regex else None),
+            F.lit(canonical_name)
+        ))
+        df_combined_spark = df_combined_spark.filter(F.length(F.col('summary')) > 0)
+
+        # Apply compound normalization
+        df_combined_spark = self._apply_compound_replacement(df_combined_spark)
+
+        # Tokenization
         self.logger.info("Tokenizing...")
-        df['words'] = df['summary'].str.split()
-        df_exploded = df.explode('words').rename(columns={'words': 'word'})
+        df_combined_spark = df_combined_spark.withColumn('words', F.split(F.col('summary'), ' '))
         
-        # Preservar year_extracted
-        df_exploded = df_exploded[['word', 'year_extracted']].copy()
+        # Add a unique ID to each row before exploding to simulate Pandas' reset_index(drop=False) behavior
+        df_combined_spark = df_combined_spark.withColumn("original_index", F.monotonically_increasing_id())
+        df_exploded_spark = df_combined_spark.withColumn('word', F.explode('words')).select('original_index', 'word', 'year_extracted')
 
-        # Limpeza de palavras
-        self.logger.info("Cleaning words...")
-        df_exploded = self._words_preprocessing_pandas(df_exploded)
+        # Word cleaning
+        self.logger.info("Cleaning words using PySpark...")
+        df_exploded_spark = self._words_preprocessing_spark(df_exploded_spark)
 
-        # Reagrupar mantendo year_extracted
+        # Regroup maintaining year_extracted
         self.logger.info("Regrouping...")
-        df_clean = df_exploded.groupby(df_exploded.index).agg({
-            'word': lambda x: ' '.join(x),
-            'year_extracted': 'first'
-        }).reset_index(drop=True)
+        window_spec = Window.partitionBy('original_index', 'year_extracted').orderBy('original_index')
+        df_clean_spark = df_exploded_spark.withColumn('summary_list', F.collect_list('word').over(window_spec)) \
+                                          .groupBy('original_index', 'year_extracted') \
+                                          .agg(F.concat_ws(' ', F.first('summary_list')).alias('summary')) \
+                                          .select('summary', 'year_extracted')
         
-        df_clean.columns = ['summary', 'year_extracted']
-        
-        df_clean = df_clean[df_clean['summary'].str.len() > 10]
-        df_clean = df_clean.drop_duplicates(subset='summary', keep='first')
-        df_clean = df_clean[['summary', 'year_extracted']].reset_index(drop=True)
+        df_clean_spark = df_clean_spark.filter(F.length(F.col('summary')) > 10)
+        df_clean_spark = df_clean_spark.dropDuplicates(subset=['summary'])
 
-        # Salvar
-        self.logger.info('Saving clean abstracts...')
+        # Save
+        self.logger.info('Saving clean abstracts with PySpark...')
         self.clean_papers_path.mkdir(parents=True, exist_ok=True)
-        output_file = Path(f'{self.clean_papers_path}/clean_abstracts.csv')
+        output_file = str(Path(f'{self.clean_papers_path}/clean_abstracts.csv'))
         
-        df_clean.to_csv(output_file, index=False)
+        df_clean_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(output_file)
 
-        self.logger.info(f'Full cleaning completed. Saved {len(df_clean)} clean abstracts to {output_file}')
+        self.logger.info(f'Full cleaning completed. Saved {df_clean_spark.count()} clean abstracts to {output_file}')
 
     # ============================================
     # --------- Download PubChem archives --------
@@ -688,6 +774,19 @@ class Preprocessing:
 
         return extracted_path
 
+    def _init_spark_session(self) -> SparkSession:
+        """Initializes and returns a SparkSession."""
+        return get_spark_session()
+
+    def _stop_spark_session(self):
+        """Stops the SparkSession."""
+        global spark_session
+        if spark_session:
+            self.logger.info("Stopping SparkSession...")
+            spark_session.stop()
+            spark_session = None
+            self.logger.info("SparkSession stopped.")
+
     def run(self, force_full: bool = False) -> bool:
         """Main execution pipeline."""
         try:
@@ -740,6 +839,8 @@ class Preprocessing:
         except Exception as e:
             self.logger.exception(f"Error in pipeline: {e}")
             return False
+        # finally:
+        #     self._stop_spark_session()
 
 
 if __name__ == "__main__":

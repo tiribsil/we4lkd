@@ -33,8 +33,8 @@ class DataCollection:
         self.aggregated_path = Path(f'./data/{self.disease_name}/corpus/aggregated_abstracts')
         self.downloaded_paper_ids_path = Path(f'./data/{self.disease_name}/corpus/ids.txt')
         self.topics_file = Path(f'./data/{self.disease_name}/topics_of_interest.txt')
-        self.titles_path = Path('data/pubchem_data/CID-Title/CID-Title')
-        self.synonyms_path = Path('data/pubchem_data/CID-Synonym-filtered/CID-Synonym-filtered')
+        self.titles_path = Path('data/pubchem_data/CID-Title')
+        self.synonyms_path = Path('data/pubchem_data/CID-Synonym-filtered')
         self.corpus_file = Path(f'{self.aggregated_path}/aggregated_corpus.txt')
         
         self.raw_abstracts_path.mkdir(parents=True, exist_ok=True)

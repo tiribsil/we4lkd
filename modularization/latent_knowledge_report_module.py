@@ -66,8 +66,8 @@ class LatentKnowledgeReportGenerator:
         self.metrics_to_plot = metrics_to_plot or self.DEFAULT_METRICS
         
         # Configurar caminhos ABSOLUTOS
-        self.base_dir = Path('./we4lkd')
-        self.data_root = self.base_dir / 'modularization' / 'data'
+        self.base_dir = Path('./')
+        self.data_root = self.base_dir / 'data'
         self.base_path = self.data_root / self.normalized_disease_name
         self.validation_path = self.base_path / 'validation'
         self.corpus_path = self.base_path / 'corpus'

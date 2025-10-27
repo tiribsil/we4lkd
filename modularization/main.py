@@ -7,7 +7,7 @@ from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 
 if __name__ == '__main__':
     start_year = 1970
-    end_year = 1973
+    end_year = 1976
 
     disease = 'acute myeloid leukemia'
     model_type = 'w2v'
