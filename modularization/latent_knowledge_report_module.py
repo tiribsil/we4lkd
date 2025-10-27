@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
 from IPython.display import display
+from utils import *
 
 try:
     from tikzplotlib import get_tikz_code
@@ -21,8 +22,6 @@ try:
 except ImportError:
     JINJA2_AVAILABLE = False
     print("Warning: jinja2 not available. LaTeX report will not be generated.")
-
-from utils import setup_logger, normalize_disease_name
 
 
 class LatentKnowledgeReportGenerator:
@@ -42,9 +41,11 @@ class LatentKnowledgeReportGenerator:
         self,
         disease_name: str,
         model_type: str,
+        target_year: int,
         top_n_compounds: int = 10,
         delta_threshold: float = 0.001,
-        metrics_to_plot: Optional[List[str]] = None):
+        metrics_to_plot: Optional[List[str]] = None,
+        ):
         """
         Inicializa o gerador de relatórios.
         
@@ -55,7 +56,7 @@ class LatentKnowledgeReportGenerator:
             metrics_to_plot: Lista de métricas para plotar
             base_dir: Diretório base do projeto (se None, usa diretório atual)
         """
-        self.logger = setup_logger("report_generator", log_to_file=False)
+        self.logger = LoggerFactory.setup_logger("report_generator", str(target_year), log_to_file=False)
         
         self.disease_name = disease_name
         self.normalized_disease_name = normalize_disease_name(disease_name)

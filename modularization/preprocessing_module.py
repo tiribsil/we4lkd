@@ -24,7 +24,7 @@ class Preprocessing:
                  target_year: Optional[int] = None, incremental: bool = True):
         load_dotenv()
 
-        self.logger = setup_logger("preprocessing", log_to_file=False)
+        self.logger = LoggerFactory.setup_logger("preprocessing", str(target_year), log_to_file=False)
 
         self.disease_name = normalize_disease_name(disease_name)
         self.spacy_model_name = "en_ner_bc5cdr_md"

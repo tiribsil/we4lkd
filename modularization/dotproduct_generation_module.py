@@ -47,7 +47,7 @@ class ValidationModule:
             embedding_method: Method to extract embeddings ('da'=direct, 'avg'=average)
             biomolecule_blacklist: Set of generic molecules to exclude
         """
-        self.logger = setup_logger("validation", log_to_file=False)
+        self.logger = setup_logger("validation", str(start_year), log_to_file=False)
         warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API", category=UserWarning)
         
         self.disease_name = normalize_disease_name(disease_name)

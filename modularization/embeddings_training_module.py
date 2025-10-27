@@ -80,7 +80,7 @@ class EmbeddingTraining:
             optuna_trials: Number of Optuna trials
             optuna_timeout: Timeout in seconds for Optuna optimization
         """
-        self.logger = setup_logger("embedding_training", log_to_file=False)
+        self.logger = LoggerFactory.setup_logger("embedding_training", target_year=str(start_year), log_to_file=False)
         
         self.disease_name = normalize_disease_name(disease_name)
         self.start_year = start_year
