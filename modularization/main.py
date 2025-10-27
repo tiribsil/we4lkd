@@ -6,8 +6,8 @@ from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 
 
 if __name__ == '__main__':
-    start_year = 2020
-    end_year = 2025
+    start_year = 1970
+    end_year = 1973
 
     disease = 'acute myeloid leukemia'
     model_type = 'w2v'
@@ -17,17 +17,18 @@ if __name__ == '__main__':
         print(f"{'='*20} Processing year: {current_year} {'='*20}")
 
         data_collection_module = DataCollection(
-        disease_name="acute myeloid leukemia",
-        target_year=current_year,
-        expand_synonyms=True,
-        filter_synonyms=True)
+            disease_name="acute myeloid leukemia",
+            target_year=current_year,
+            expand_synonyms=True,
+            filter_synonyms=True
+        )
 
         data_collection_module.run()
 
         preprocessing_module = Preprocessing(
-                disease_name=disease,
-                incremental=True
-            )
+            disease_name=disease,
+            incremental=True
+        )
             
         preprocessing_module.run(force_full=False)
 
@@ -43,10 +44,11 @@ if __name__ == '__main__':
         
         embedding_trainer.run(year_over_year=False)
 
-
-        validator = ValidationModule(disease_name=disease,
-                                    start_year=start_year,
-                                    end_year = current_year)
+        validator = ValidationModule(
+            disease_name=disease,
+            start_year=start_year,
+            end_year = current_year
+        )
         
         validator.run()
 

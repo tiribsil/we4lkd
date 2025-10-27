@@ -403,7 +403,7 @@ class ValidationModule:
         if len(normalized_values) > 0 and len(euclidean_distances) > 0:
             # Substituir NaN por 0 apenas para cálculo do score
             safe_delta = np.nan_to_num(delta_values, nan=0.0)
-            score = normalized_values * (1 + safe_delta) / (euclidean_distances + 1e-9)
+            score = normalized_values * (1 + 10 * safe_delta) / (euclidean_distances + 1e-9)
             compound_data["score"] = score.tolist()
         else:
             compound_data["score"] = []

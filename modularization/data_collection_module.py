@@ -372,6 +372,7 @@ class DataCollection:
                     article_title_filename = article_title.lower().translate(
                         str.maketrans('', '', string.punctuation)).replace(' ', '_')
                 except KeyError:
+                    self.logger.info(f"Discarding paper due to missing article title. Paper ID: {paper.get('MedlineCitation', {}).get('PMID')}")
                     continue
                 
                 abstract_texts = paper['MedlineCitation']['Article'].get('Abstract', {}).get('AbstractText', [])
@@ -380,23 +381,23 @@ class DataCollection:
                 else:
                     article_abstract = str(abstract_texts)
                 
-                if not article_abstract or article_abstract == 'None':
-                    continue
+
                 
                 try:
                     pub_date = paper['MedlineCitation']['Article']['Journal']['JournalIssue']['PubDate']
                     article_year = pub_date.get('Year') or pub_date.get('MedlineDate', '')[:4]
                 except KeyError:
+                    self.logger.debug(f"Discarding paper due to missing publication date. Paper ID: {paper.get('MedlineCitation', {}).get('PMID')}")
                     continue
                 
                 if not article_year or len(article_year) != 4 or not article_year.isdigit():
+                    self.logger.info(f"Discarding paper due to invalid article year ({article_year}). Paper ID: {paper.get('MedlineCitation', {}).get('PMID')}")
                     continue
                 
                 article_year = int(article_year)
                 
                 # Aceita apenas papers do target_year
-                if article_year != self.target_year:
-                    continue
+                #if article_year != self.target_year: continue
                 
                 filename = f"{article_year}_{article_title_filename[:146]}"
                 filename = filename.encode('ascii', 'ignore').decode('ascii')

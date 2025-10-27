@@ -42,10 +42,11 @@ class Preprocessing:
         self.aggregated_abstracts_path = Path(f'./data/{self.disease_name}/corpus/aggregated_abstracts')
         self.processed_years_file = Path(f'{self.clean_papers_path}/processed_years.txt')
 
-        self.filepaths = {
-            "CID-Title.gz": Path("./data/pubchem_data/CID-Title"),
-            "CID-Synonym-filtered.gz": Path("./data/pubchem_data/CID-Synonym-filtered"),
-        }
+        self.pubchem_data_dir = Path("./data/pubchem_data/")
+        self.cid_title_gz = self.pubchem_data_dir / "CID-Title.gz"
+        self.cid_synonym_filtered_gz = self.pubchem_data_dir / "CID-Synonym-filtered.gz"
+        self.cid_title_file = self.pubchem_data_dir / "CID-Title"
+        self.cid_synonym_filtered_file = self.pubchem_data_dir / "CID-Synonym-filtered"
 
         self.nlp = None
         self.load_spacy_model()
@@ -67,6 +68,7 @@ class Preprocessing:
         self._compiled_regex = self._compile_regex_patterns()
 
         self._stopwords = None
+        self._compound_replacement_map = None
         self.base_url = "https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/"
 
         
@@ -323,6 +325,74 @@ class Preprocessing:
         
         return None, ""
 
+    def _create_compound_replacement_map(self) -> List[Tuple[str, str]]:
+        """Creates a sorted list of (term, replacement) for compound normalization."""
+        if self._compound_replacement_map is not None:
+            return self._compound_replacement_map
+
+        self.logger.info("Creating compound replacement map...")
+
+        # Define paths for PubChem data
+        synonyms_path = self.cid_synonym_filtered_file
+        titles_path = self.cid_title_file
+        ner_table_path = self.output_csv
+
+        # Check for required files
+        if not all([synonyms_path.exists(), titles_path.exists(), ner_table_path.exists()]):
+            self.logger.warning("Missing required files for compound normalization (synonyms, titles, or NER table). Skipping.")
+            return []
+
+        # Read data using Pandas
+        try:
+            synonyms_df = pd.read_csv(synonyms_path, sep='\t', header=None, names=['cid', 'synonym'], on_bad_lines='warn')
+            titles_df = pd.read_csv(titles_path, sep='\t', header=None, names=['cid', 'title'], on_bad_lines='warn')
+            ner_df = pd.read_csv(ner_table_path)
+        except Exception as e:
+            self.logger.error(f"Error reading data for compound map: {e}")
+            return []
+
+        # Create the full compound map
+        compound_map_df = pd.merge(synonyms_df, titles_df, on='cid')
+        compound_map_df['replacement'] = compound_map_df['title'].str.lower().str.replace(r'\s+', '', regex=True)
+        compound_map_df['term'] = compound_map_df['synonym'].str.lower()
+        compound_map_df = compound_map_df[['term', 'replacement']].dropna()
+        compound_map_df = compound_map_df[compound_map_df['term'].str.len() > 1]
+        compound_map_df = compound_map_df[compound_map_df['term'] != compound_map_df['replacement']]
+        compound_map_df = compound_map_df.drop_duplicates()
+
+        # Filter map using terms from the NER table
+        self.logger.info("Filtering compound map using NER table...")
+        corpus_chemical_terms = set(ner_df['token'].str.lower().unique())
+        filtered_map_df = compound_map_df[compound_map_df['term'].isin(corpus_chemical_terms)]
+
+        # Collect and sort the map by term length (descending)
+        replacement_list = list(filtered_map_df.itertuples(index=False, name=None))
+        replacement_list.sort(key=lambda x: len(x[0]), reverse=True)
+
+        self.logger.info(f"Collected {len(replacement_list)} relevant compound terms for replacement.")
+        self._compound_replacement_map = replacement_list
+        return self._compound_replacement_map
+
+    def _replace_compounds_in_text(self, text: str, replacement_map: List[Tuple[str, str]]) -> str:
+        """Replaces compound synonyms in a single text."""
+        if not text or not replacement_map:
+            return text
+        for term, replacement in replacement_map:
+            pattern = r'(?i)\b' + re.escape(term) + r'\b'
+            text = re.sub(pattern, replacement, text)
+        return text
+
+    def _apply_compound_replacement(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Applies compound replacement to the 'summary' column of a DataFrame."""
+        replacement_map = self._create_compound_replacement_map()
+        if not replacement_map:
+            self.logger.warning("No compound replacement map available. Skipping replacement.")
+            return df
+
+        self.logger.info("Applying compound synonym replacement...")
+        df['summary'] = df['summary'].apply(lambda x: self._replace_compounds_in_text(x, replacement_map))
+        return df
+
     def _summary_preprocessing_pandas(self, text: str) -> str:
         """Preprocessing de texto usando regex pré-compilados."""
         if pd.isna(text) or not text:
@@ -390,6 +460,9 @@ class Preprocessing:
         self.logger.info(f"Cleaning {len(df)} summaries from year {year}...")
         df['summary'] = df['summary'].apply(self._summary_preprocessing_pandas)
         df = df[df['summary'].str.len() > 0].copy()
+
+        # Aplicar normalização de compostos
+        df = self._apply_compound_replacement(df)
 
         # Tokenização
         df['words'] = df['summary'].str.split()
@@ -520,6 +593,9 @@ class Preprocessing:
         df['summary'] = df['summary'].apply(self._summary_preprocessing_pandas)
         df = df[df['summary'].str.len() > 0]
 
+        # Aplicar normalização de compostos
+        df = self._apply_compound_replacement(df)
+
         # Tokenização
         self.logger.info("Tokenizing...")
         df['words'] = df['summary'].str.split()
@@ -617,10 +693,20 @@ class Preprocessing:
         try:
             # Download PubChem data (se necessário)
             self.logger.info("=== Checking PubChem data ===")
-            for file_name, target_dir in self.filepaths.items():
-                result = self.download_if_missing(file_name, target_dir)
-                if result is None:
-                    self.logger.warning(f"Failed to download {file_name}")
+            
+            # Download and extract CID-Title
+            result_title = self.download_if_missing(self.cid_title_gz.name, self.pubchem_data_dir)
+            if result_title is None:
+                self.logger.warning(f"Failed to download or extract {self.cid_title_gz.name}")
+                return False
+            self.cid_title_file = result_title # Update to the extracted path
+
+            # Download and extract CID-Synonym-filtered
+            result_synonym = self.download_if_missing(self.cid_synonym_filtered_gz.name, self.pubchem_data_dir)
+            if result_synonym is None:
+                self.logger.warning(f"Failed to download or extract {self.cid_synonym_filtered_gz.name}")
+                return False
+            self.cid_synonym_filtered_file = result_synonym # Update to the extracted path
 
             # NER extraction
             self.logger.info("=== Starting NER table generation ===")
