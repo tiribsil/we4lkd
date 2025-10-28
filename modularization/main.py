@@ -26,6 +26,7 @@ if __name__ == '__main__':
         data_collection_module.run()
 
         preprocessing_module = Preprocessing(
+            target_year=current_year,
             disease_name=disease,
             incremental=True
         )
@@ -56,7 +57,8 @@ if __name__ == '__main__':
             disease_name=disease,
             model_type = model_type,
             top_n_compounds=20,
-            delta_threshold=0.001
+            delta_threshold=0.001,
+            target_year=current_year
         )
         
         # Executar pipeline
