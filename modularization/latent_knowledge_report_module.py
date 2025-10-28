@@ -42,8 +42,8 @@ class LatentKnowledgeReportGenerator:
         self,
         disease_name: str,
         model_type: str,
-        top_n_compounds: int = 10,
         target_year: int,
+        top_n_compounds: int = 10,
         delta_threshold: float = 0.001,
         metrics_to_plot: Optional[List[str]] = None):
         """
