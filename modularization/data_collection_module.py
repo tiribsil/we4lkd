@@ -9,13 +9,15 @@ from dotenv import load_dotenv
 from Bio import Entrez
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import warnings
+from utils import *
+
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API", category=UserWarning)
 
 class DataCollection:
     def __init__(self, disease_name: str, target_year: int, max_workers: int = 4, 
                  expand_synonyms: bool = False, filter_synonyms: bool = True):
         load_dotenv()
-        self.logger = self.setup_logger("data_collection", log_to_file=False)
+        self.logger = LoggerFactory.setup_logger("data_collection", target_year=str(target_year), log_to_file=False)
         self.disease_name = self.normalize_disease_name(disease_name)
         self.target_year = target_year
         self.retmax_papers = 9998  # Máximo permitido pelo NCBI
@@ -443,30 +445,6 @@ class DataCollection:
         self.logger.info(f"Total time: {minutes} min {seconds} sec")
         
         return self.paper_counter
-
-    @staticmethod
-    def setup_logger(name: str = "logger", log_level: int = logging.INFO, 
-                     log_to_file: bool = False, log_file: str = "app.log",
-                     max_bytes: int = 5 * 1024 * 1024, backup_count: int = 3) -> logging.Logger:
-        logger = logging.getLogger(name)
-        if logger.handlers:
-            return logger
-        
-        logger.setLevel(log_level)
-        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
-        
-        if log_to_file:
-            os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            file_handler = RotatingFileHandler(log_file, maxBytes=max_bytes, 
-                                              backupCount=backup_count, encoding="utf-8")
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
-        
-        return logger
 
 
 if __name__ == '__main__':
