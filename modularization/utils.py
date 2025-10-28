@@ -5,24 +5,46 @@ from pathlib import Path
 from functools import reduce
 from logging.handlers import RotatingFileHandler
 
-@staticmethod
-def setup_logger(name: str = "logger", log_level: int = logging.INFO,
-                    log_to_file: bool = False, log_file: str = "app.log",
-                    max_bytes: int = 5 * 1024 * 1024, backup_count: int = 3) -> logging.Logger:
-    logger = logging.getLogger(name)
-    if logger.handlers:
+class TargetYearFilter(logging.Filter):
+    def __init__(self, target_year: str):
+        super().__init__()
+        self.target_year = target_year
+
+    def filter(self, record):
+        record.target_year = self.target_year
+        return True
+
+
+class LoggerFactory:
+    @staticmethod
+    def setup_logger(name: str = "logger", target_year: str = "0000", log_level: int = logging.INFO,
+                     log_to_file: bool = False, log_file: str = "app.log",
+                     max_bytes: int = 5 * 1024 * 1024, backup_count: int = 3) -> logging.Logger:
+
+        logger = logging.getLogger(name)
+        if logger.handlers:
+            return logger
+
+        logger.setLevel(log_level)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(target_year)s - %(levelname)s - %(message)s"
+        )
+
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        console_handler.addFilter(TargetYearFilter(target_year))
+        logger.addHandler(console_handler)
+
+        if log_to_file:
+            os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+            file_handler = RotatingFileHandler(
+                log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
+            )
+            file_handler.setFormatter(formatter)
+            file_handler.addFilter(TargetYearFilter(target_year))
+            logger.addHandler(file_handler)
+
         return logger
-    logger.setLevel(log_level)
-    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    if log_to_file:
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        file_handler = RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-    return logger
 
 
 def normalize_disease_name(disease_name: str) -> str:
