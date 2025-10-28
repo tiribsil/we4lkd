@@ -327,7 +327,7 @@ def generate_compound_dot_products_csv(normalized_target_disease: str, model_typ
 
         # Computes a score to measure the overall closeness to the target disease
         if normalized_values.size > 0:
-            score = normalized_values * (1 + delta_values) / (euclidian_distances + 1e-9)
+            score = normalized_values * (1 + (10 * delta_values)) / (euclidian_distances + 1e-9)
             dictionary_for_all_compounds[key]['score'] = score.tolist()
         else:
             dictionary_for_all_compounds[key]['score'] = []

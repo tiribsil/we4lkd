@@ -7,11 +7,11 @@ from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 
 if __name__ == '__main__':
     start_year = 1970
-    end_year = 1976
+    end_year = 2000
 
     disease = 'acute myeloid leukemia'
     model_type = 'w2v'
-    optuna_trials = 2 #quantas vezes o optuna vai rodar o modelo para encontrar os melhores hiperparâmetros -quanto maior o valor, mais tempo demora, mas melhor fica o modelo final
+    optuna_trials = 5 #quantas vezes o optuna vai rodar o modelo para encontrar os melhores hiperparâmetros -quanto maior o valor, mais tempo demora, mas melhor fica o modelo final
 
     for current_year in range(start_year, end_year + 1):
         print(f"{'='*20} Processing year: {current_year} {'='*20}")

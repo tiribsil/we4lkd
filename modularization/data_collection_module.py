@@ -51,17 +51,8 @@ class DataCollection:
         with open(file_path, 'r', encoding='utf-8') as f:
             return [line.strip() for line in f if line.strip()]
 
-    def generate_query(self, disease_name: str) -> str:
-        if not self.topics_file.exists():
-            self.topics_file.parent.mkdir(parents=True, exist_ok=True)
-            self.topics_file.write_text(disease_name + '\n', encoding='utf-8')
-        
-        topics = self.list_from_file(self.topics_file)
-        
-        if len(topics) > 1 and self.expand_synonyms:
-            topics = self.get_synonyms_for_terms(topics, self.filter_synonyms)
-        
-        self.logger.info(f'Query will use {len(topics)} topics')
+    def generate_query_for_topics(self, topics: list) -> str:
+        self.logger.info(f'Generating query for {len(topics)} topics')
         sub_queries = [f'("{topic}"[Title/Abstract] OR "{topic}"[MeSH Terms])' for topic in topics]
         return f'({" OR ".join(sub_queries)})'
 
@@ -330,23 +321,46 @@ class DataCollection:
         self.logger.info(f'Target disease: {self.disease_name}')
         self.logger.info(f'Target year: {self.target_year}')
         
-        query = self.generate_query(self.disease_name).encode('ascii', 'ignore').decode('ascii')
-        downloaded_paper_ids = set(self.list_from_file(self.downloaded_paper_ids_path))
+        # 1. Carregar e expandir tópicos
+        if not self.topics_file.exists():
+            self.topics_file.parent.mkdir(parents=True, exist_ok=True)
+            self.topics_file.write_text(self.disease_name + '\n', encoding='utf-8')
+            
+        topics = self.list_from_file(self.topics_file)
+        if len(topics) > 1 and self.expand_synonyms:
+            topics = self.get_synonyms_for_terms(topics, self.filter_synonyms)
         
+        downloaded_paper_ids = set(self.list_from_file(self.downloaded_paper_ids_path))
         self.logger.info(f"Already have {len(downloaded_paper_ids)} papers downloaded")
         
-        # Busca apenas o target_year com paginação
-        self.logger.info("="*60)
-        self.logger.info(f"SEARCHING PUBMED FOR YEAR {self.target_year}")
-        self.logger.info("="*60)
+        # 2. Dividir tópicos em chunks para evitar erro de excesso de operadores
+        topic_chunk_size = 100  # Ajustável
+        topic_chunks = [topics[i:i + topic_chunk_size] for i in range(0, len(topics), topic_chunk_size)]
         
-        all_paper_ids = self.search_with_pagination(query, self.target_year)
+        self.logger.info(f"Processing {len(topics)} topics in {len(topic_chunks)} chunks.")
+        
+        all_paper_ids = set()
+        
+        # 3. Iterar sobre os chunks e buscar
+        for i, chunk in enumerate(topic_chunks):
+            self.logger.info("="*60)
+            self.logger.info(f"SEARCHING CHUNK {i+1}/{len(topic_chunks)} FOR YEAR {self.target_year}")
+            self.logger.info("="*60)
+            
+            query = self.generate_query_for_topics(chunk).encode('ascii', 'ignore').decode('ascii')
+            chunk_paper_ids = self.search_with_pagination(query, self.target_year)
+            
+            if chunk_paper_ids:
+                self.logger.info(f"Chunk {i+1} found {len(chunk_paper_ids)} papers.")
+                all_paper_ids.update(chunk_paper_ids)
+            else:
+                self.logger.warning(f"Chunk {i+1} found no papers.")
         
         if not all_paper_ids:
-            self.logger.warning("No papers found in search")
+            self.logger.warning("No papers found in search across all chunks")
             return 0
         
-        self.logger.info(f"Search completed: {len(all_paper_ids)} paper IDs collected")
+        self.logger.info(f"Search completed: {len(all_paper_ids)} unique paper IDs collected across all chunks")
         
         new_paper_id_list = list(all_paper_ids - downloaded_paper_ids)
         

@@ -3,6 +3,7 @@ import re
 import gzip
 import shutil
 import requests
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from typing import List, Dict, Optional, Tuple, Set
@@ -789,56 +790,61 @@ class Preprocessing:
 
     def run(self, force_full: bool = False) -> bool:
         """Main execution pipeline."""
-        try:
-            # Download PubChem data (se necessário)
-            self.logger.info("=== Checking PubChem data ===")
-            
-            # Download and extract CID-Title
-            result_title = self.download_if_missing(self.cid_title_gz.name, self.pubchem_data_dir)
-            if result_title is None:
-                self.logger.warning(f"Failed to download or extract {self.cid_title_gz.name}")
-                return False
-            self.cid_title_file = result_title # Update to the extracted path
+        while True:
+            try:
+                # Download PubChem data (se necessário)
+                self.logger.info("=== Checking PubChem data ===")
+                
+                # Download and extract CID-Title
+                result_title = self.download_if_missing(self.cid_title_gz.name, self.pubchem_data_dir)
+                if result_title is None:
+                    self.logger.warning(f"Failed to download or extract {self.cid_title_gz.name}, will retry.")
+                    raise requests.exceptions.ConnectionError(f"Failed to download {self.cid_title_gz.name}")
+                self.cid_title_file = result_title # Update to the extracted path
 
-            # Download and extract CID-Synonym-filtered
-            result_synonym = self.download_if_missing(self.cid_synonym_filtered_gz.name, self.pubchem_data_dir)
-            if result_synonym is None:
-                self.logger.warning(f"Failed to download or extract {self.cid_synonym_filtered_gz.name}")
-                return False
-            self.cid_synonym_filtered_file = result_synonym # Update to the extracted path
+                # Download and extract CID-Synonym-filtered
+                result_synonym = self.download_if_missing(self.cid_synonym_filtered_gz.name, self.pubchem_data_dir)
+                if result_synonym is None:
+                    self.logger.warning(f"Failed to download or extract {self.cid_synonym_filtered_gz.name}, will retry.")
+                    raise requests.exceptions.ConnectionError(f"Failed to download {self.cid_synonym_filtered_gz.name}")
+                self.cid_synonym_filtered_file = result_synonym # Update to the extracted path
 
-            # NER extraction
-            self.logger.info("=== Starting NER table generation ===")
-            if not self.nlp:
-                self.logger.error("spaCy model not loaded")
-                return False
+                # NER extraction
+                self.logger.info("=== Starting NER table generation ===")
+                if not self.nlp:
+                    self.logger.error("spaCy model not loaded")
+                    return False
 
-            years_to_process = None if force_full or not self.incremental else self._get_years_to_process()
-            
-            if years_to_process:
-                self.logger.info(f"Processing NER for years: {years_to_process}")
-                ner_data = self.process_abstracts(years=years_to_process)
-                if ner_data:
-                    self.save_ner_table(ner_data, append=True)
-            else:
-                self.logger.info("Processing NER for full corpus")
-                ner_data = self.process_abstracts()
-                if ner_data:
-                    self.save_ner_table(ner_data, append=False)
+                years_to_process = None if force_full or not self.incremental else self._get_years_to_process()
+                
+                if years_to_process:
+                    self.logger.info(f"Processing NER for years: {years_to_process}")
+                    ner_data = self.process_abstracts(years=years_to_process)
+                    if ner_data:
+                        self.save_ner_table(ner_data, append=True)
+                else:
+                    self.logger.info("Processing NER for full corpus")
+                    ner_data = self.process_abstracts()
+                    if ner_data:
+                        self.save_ner_table(ner_data, append=False)
 
-            # Text cleaning
-            self.logger.info("=== Starting preprocessing pipeline ===")
-            
-            if force_full or not self.incremental:
-                self.clean_and_normalize()
-            else:
-                self.clean_and_normalize_incremental(years_to_process)
-            
-            return True
-            
-        except Exception as e:
-            self.logger.exception(f"Error in pipeline: {e}")
-            return False
+                # Text cleaning
+                self.logger.info("=== Starting preprocessing pipeline ===")
+                
+                if force_full or not self.incremental:
+                    self.clean_and_normalize()
+                else:
+                    self.clean_and_normalize_incremental(years_to_process)
+                
+                self.logger.info("Preprocessing successful.")
+                return True
+                
+            except requests.exceptions.ConnectionError as e:
+                self.logger.error(f"A connection error occurred: {e}. Retrying in 60 seconds...")
+                time.sleep(60)
+            except Exception as e:
+                self.logger.exception(f"An unexpected error occurred in pipeline: {e}. Retrying in 60 seconds...")
+                time.sleep(60)
         # finally:
         #     self._stop_spark_session()
 
