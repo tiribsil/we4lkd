@@ -65,10 +65,10 @@ def get_spark_session() -> SparkSession:
         print("Initializing SparkSession...")
         spark_session = SparkSession.builder \
             .appName("PreprocessingPipeline") \
-            .config("spark.executor.memory", "16g") \
-            .config("spark.driver.memory", "8g") \
-            .config("spark.driver.maxResultSize", "4g") \
-            .config("spark.sql.shuffle.partitions", "200") \
+            .config("spark.executor.memory", "64g") \
+            .config("spark.driver.memory", "32g") \
+            .config("spark.driver.maxResultSize", "8g") \
+            .config("spark.sql.shuffle.partitions", "1000") \
             .config("spark.sql.adaptive.enabled", "true") \
             .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
             .config("spark.local.dir", "/tmp/spark-temp") \
@@ -605,22 +605,9 @@ class Preprocessing:
         output_file = str(Path(f'{self.clean_papers_path}/clean_abstracts.csv'))
         
         if Path(output_file).exists() and self.incremental:
-            # Modo incremental: carregar existente e combinar
-            self.logger.info("Loading existing clean abstracts with PySpark...")
-            df_existing_spark = self.spark.read.option("header", "true").option("sep", ",").csv(output_file)
-            
-            # Garantir que df_existing tem year_extracted
-            if 'year_extracted' not in df_existing_spark.columns:
-                self.logger.warning("Existing data missing year_extracted column. Cannot merge properly.")
-                self.logger.info("Saving new data separately...")
-                df_new_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(output_file)
-            else:
-                df_combined_spark = df_existing_spark.unionByName(df_new_spark)
-                df_combined_spark = df_combined_spark.dropDuplicates(subset=['summary'])
-                
-                self.logger.info(f"Combined: {df_existing_spark.count()} existing + {df_new_spark.count()} new = {df_combined_spark.count()} total")
-                
-                df_combined_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(output_file)
+            # Modo incremental: apenas anexar novos resultados
+            self.logger.info(f"Appending {df_new_spark.count()} new clean abstracts...")
+            df_new_spark.coalesce(1).write.mode('append').option("header", "true").csv(output_file)
         else:
             # Primeira execução ou modo full
             self.logger.info(f"Saving {df_new_spark.count()} clean abstracts with PySpark...")
