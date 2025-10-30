@@ -6,7 +6,7 @@ from functools import reduce
 from logging.handlers import RotatingFileHandler
 
 class TargetYearFilter(logging.Filter):
-    def __init__(self, target_year: str):
+    def __init__(self, target_year: str = None):
         super().__init__()
         self.target_year = target_year
 
@@ -15,20 +15,34 @@ class TargetYearFilter(logging.Filter):
         return True
 
 
+class OptionalTargetYearFormatter(logging.Formatter):
+    def format(self, record):
+        if getattr(record, "target_year", None):
+            self._style._fmt = "%(asctime)s - %(name)s - %(target_year)s - %(levelname)s - %(message)s"
+        else:
+            self._style._fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        return super().format(record)
+
+
 class LoggerFactory:
     @staticmethod
-    def setup_logger(name: str = "logger", target_year: str = "0000", log_level: int = logging.INFO,
-                     log_to_file: bool = False, log_file: str = "app.log",
-                     max_bytes: int = 5 * 1024 * 1024, backup_count: int = 3) -> logging.Logger:
+    def setup_logger(
+        name: str = "logger",
+        target_year: str = None,
+        log_level: int = logging.INFO,
+        log_to_file: bool = False,
+        log_file: str = "app.log",
+        max_bytes: int = 5 * 1024 * 1024,
+        backup_count: int = 3,
+    ) -> logging.Logger:
 
         logger = logging.getLogger(name)
         if logger.handlers:
             return logger
 
         logger.setLevel(log_level)
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(target_year)s - %(levelname)s - %(message)s"
-        )
+
+        formatter = OptionalTargetYearFormatter()
 
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
