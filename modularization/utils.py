@@ -22,9 +22,8 @@ class LoggerFactory:
                      max_bytes: int = 5 * 1024 * 1024, backup_count: int = 3) -> logging.Logger:
 
         logger = logging.getLogger(name)
-        # Clear existing handlers to allow for reconfiguration
-        if logger.hasHandlers():
-            logger.handlers.clear()
+        if logger.handlers:
+            return logger
 
         logger.setLevel(log_level)
         formatter = logging.Formatter(
