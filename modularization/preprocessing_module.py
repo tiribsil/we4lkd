@@ -570,7 +570,7 @@ class Preprocessing:
         return df_clean.select('summary', 'year_extracted')
 
     def clean_and_normalize_incremental(self, years_to_process: Optional[List[int]] = None):
-        """Limpa e normaliza abstracts de forma incremental usando PySpark."""
+        """Limpa e normaliza abstracts de forma incremental usando PySpark, salvando apenas um CSV final."""
         self.logger.info('Initializing incremental abstract cleaning using PySpark...')
         
         if years_to_process is None:
@@ -586,7 +586,7 @@ class Preprocessing:
         yearly_results_spark = []
         for year in years_to_process:
             df_year_spark = self._process_year_summaries(year)
-            if df_year_spark.count() > 0: # Check if DataFrame is not empty
+            if df_year_spark.count() > 0:  # Check if DataFrame is not empty
                 yearly_results_spark.append(df_year_spark)
                 self._mark_year_as_processed(year)
         
@@ -602,17 +602,26 @@ class Preprocessing:
         df_new_spark = df_new_spark.dropDuplicates(subset=['summary'])
         
         # Arquivo de saída principal
-        output_file = str(Path(f'{self.clean_papers_path}/clean_abstracts.csv'))
+        output_file = self.clean_papers_path / "clean_abstracts.csv"
+        temp_dir = self.clean_papers_path / "temp_clean_abstracts"
         
-        if Path(output_file).exists() and self.incremental:
-            # Modo incremental: apenas anexar novos resultados
-            self.logger.info(f"Appending {df_new_spark.count()} new clean abstracts...")
-            df_new_spark.coalesce(1).write.mode('append').option("header", "true").csv(output_file)
+        # Se existir CSV anterior, carregamos e unimos
+        if output_file.exists():
+            self.logger.info(f"Appending new abstracts to existing CSV: {output_file}")
+            df_existing = self.spark.read.option("header", "true").csv(str(output_file))
+            df_combined = df_existing.unionByName(df_new_spark).dropDuplicates(subset=['summary'])
         else:
-            # Primeira execução ou modo full
-            self.logger.info(f"Saving {df_new_spark.count()} clean abstracts with PySpark...")
-            self.clean_papers_path.mkdir(parents=True, exist_ok=True)
-            df_new_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(output_file)
+            df_combined = df_new_spark
+        
+        # Salvar no diretório temporário
+        df_combined.coalesce(1).write.mode('overwrite').option("header", "true").csv(str(temp_dir))
+        
+        # Mover e renomear part file para clean_abstracts.csv
+        part_file = list(temp_dir.glob("part-*.csv"))[0]
+        shutil.move(str(part_file), str(output_file))
+        
+        # Remover a pasta temporária
+        shutil.rmtree(temp_dir)
         
         self.logger.info(f'Incremental cleaning completed. Output: {output_file}')
 
