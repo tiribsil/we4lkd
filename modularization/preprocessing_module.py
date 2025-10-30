@@ -818,7 +818,12 @@ class Preprocessing:
                 # Text cleaning
                 self.logger.info("=== Starting preprocessing pipeline ===")
                 
-                if force_full or not self.incremental:
+                output_file = Path(f'{self.clean_papers_path}/clean_abstracts.csv')
+                # If the main file doesn't exist, always perform a full run to build it from scratch
+                if not output_file.exists():
+                    self.logger.info(f"Output file {output_file} not found. Forcing a full preprocessing run.")
+                    self.clean_and_normalize()
+                elif force_full or not self.incremental:
                     self.clean_and_normalize()
                 else:
                     self.clean_and_normalize_incremental(years_to_process)
