@@ -166,3 +166,4 @@ wrapt==1.17.3
 xkit==0.0.0
 zipp==1.0.0
 zope.interface==5.4.0
+sentence-transformers

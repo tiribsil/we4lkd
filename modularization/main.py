@@ -6,7 +6,7 @@ from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 
 
 if __name__ == '__main__':
-    start_year = 1970
+    start_year = 1990
     end_year = 2000
 
     disease = 'acute myeloid leukemia'
@@ -33,7 +33,7 @@ if __name__ == '__main__':
             
         preprocessing_module.run(force_full=False)
 
-        embedding_trainer = EmbeddingTraining(
+        """embedding_trainer = EmbeddingTraining(
             disease_name=disease,
             start_year=start_year,
             end_year=current_year,
@@ -62,5 +62,5 @@ if __name__ == '__main__':
         )
         
         # Executar pipeline
-        success = report_generator.run(generate_latex=True)
+        success = report_generator.run(generate_latex=True)"""
  
