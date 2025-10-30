@@ -236,7 +236,8 @@ def summary_column_preprocessing(column, target_disease: str, entrez_email: str)
     column = F.regexp_replace(column, r'\s+', ' ')
 
     # Troca aqueles termos que são sinônimos da doença por um nome único.
-    column = F.regexp_replace(column, regex, canonical_name)
+    if disease_synonyms:
+        column = F.regexp_replace(column, regex, canonical_name)
 
     # Troca sinônimos de compostos por nomes únicos.
 

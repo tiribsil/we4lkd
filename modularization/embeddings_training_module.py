@@ -112,7 +112,7 @@ class EmbeddingTraining:
         self.sg = 1
         self.hs = 0
         self.epochs = 15
-        self.min_corpus_size = 10
+        self.min_corpus_size = 5
         self.workers = 4
         
         # Paths
@@ -146,16 +146,29 @@ class EmbeddingTraining:
         return self._corpus_df
 
     def _load_corpus(self) -> Optional[pd.DataFrame]:
-        """Carrega corpus de abstracts limpos."""
+        """Carrega corpus de abstracts limpos, suportando diretórios de saída do Spark."""
         if not self.corpus_path.exists():
-            self.logger.error(f"Corpus file not found at {self.corpus_path}")
+            self.logger.error(f"Corpus path not found at {self.corpus_path}")
             self.logger.error("Have you run the preprocessing module?")
             return None
         
         try:
             self.logger.info(f"Loading corpus from {self.corpus_path}")
             
-            df = pd.read_csv(self.corpus_path)
+            if self.corpus_path.is_dir():
+                # If it's a directory (Spark output), read all part-xxxx.csv files
+                csv_files = list(self.corpus_path.glob('*.csv'))
+                if not csv_files:
+                    self.logger.error(f"No CSV files found in Spark output directory: {self.corpus_path}")
+                    return None
+                
+                list_df = []
+                for f in csv_files:
+                    list_df.append(pd.read_csv(f))
+                df = pd.concat(list_df, ignore_index=True)
+            else:
+                # If it's a single file (older output format or non-Spark)
+                df = pd.read_csv(self.corpus_path)
             
             if 'summary' not in df.columns:
                 self.logger.error("Column 'summary' not found in corpus")
@@ -285,7 +298,6 @@ class EmbeddingTraining:
             'alpha': trial.suggest_float('alpha', 0.001, 0.05, log=True),
             'negative': trial.suggest_int('negative', 5, 20),
             'window': trial.suggest_int('window', 3, 10),
-            'min_count': trial.suggest_int('min_count', 1, 5),
         }
         
         # Parâmetros específicos do FastText
@@ -302,7 +314,7 @@ class EmbeddingTraining:
                 'alpha': params['alpha'],
                 'negative': params['negative'],
                 'window': params['window'],
-                'min_count': params['min_count'],
+                'min_count': self.min_count,
                 'sg': self.sg,
                 'hs': self.hs,
                 'epochs': self.epochs,

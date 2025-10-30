@@ -9,6 +9,8 @@ from matplotlib import pyplot as plt
 from IPython.display import display
 from utils import *
 
+from utils import *
+
 try:
     from tikzplotlib import get_tikz_code
     TIKZ_AVAILABLE = True
@@ -67,8 +69,8 @@ class LatentKnowledgeReportGenerator:
         self.metrics_to_plot = metrics_to_plot or self.DEFAULT_METRICS
         
         # Configurar caminhos ABSOLUTOS
-        self.base_dir = Path('./we4lkd')
-        self.data_root = self.base_dir / 'modularization' / 'data'
+        self.base_dir = Path('./')
+        self.data_root = self.base_dir / 'data'
         self.base_path = self.data_root / self.normalized_disease_name
         self.validation_path = self.base_path / 'validation'
         self.corpus_path = self.base_path / 'corpus'
@@ -399,7 +401,7 @@ class LatentKnowledgeReportGenerator:
     def feedback_new_topics(
         self,
         max_new_topics: int = 4,
-        max_topics: int = 4
+        max_topics: int = 8
     ) -> None:
         """
         Adiciona novos compostos do arquivo 'potential_treatments.txt' ao
@@ -430,6 +432,9 @@ class LatentKnowledgeReportGenerator:
 
             new_topics_added_count = 0
             for topic in potential_new_treatments:
+                if len(existing_topics) >= max_topics:
+                    self.logger.info(f"Topic limit of {max_topics} reached. No more topics will be added.")
+                    break
                 if topic in existing_topics:
                     continue
                 existing_topics.add(topic)
@@ -437,14 +442,15 @@ class LatentKnowledgeReportGenerator:
                 if new_topics_added_count >= max_new_topics:
                     break
 
-            # Escrever arquivo atualizado
+            # Escrever arquivo atualizado, garantindo o limite
+            topics_to_write = sorted(list(existing_topics))[:max_topics]
             with open(topics_file, 'w', encoding='utf-8') as f:
-                for topic in sorted(existing_topics):
+                for topic in topics_to_write:
                     f.write(f"{topic}\n")
 
             self.logger.info(
                 f"Feedback complete: {new_topics_added_count} new potential treatments added. "
-                f"Total topics now: {len(existing_topics)}."
+                f"Total topics now: {len(topics_to_write)}."
             )
 
         except IOError as e:

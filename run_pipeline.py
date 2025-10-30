@@ -140,5 +140,5 @@ def main_pipeline():
 
 
 if __name__ == '__main__':
-    set_target_disease("acute myeloid leukemia")
+    set_target_disease("diabetes")
     main_pipeline()
