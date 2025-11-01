@@ -28,6 +28,7 @@ if __name__ == '__main__':
         preprocessing_module = Preprocessing(
             target_year=current_year,
             disease_name=disease,
+            target_year=current_year,
             incremental=True
         )
             

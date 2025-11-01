@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
 from IPython.display import display
+from utils import *
 
 from utils import *
 
@@ -45,7 +46,8 @@ class LatentKnowledgeReportGenerator:
         target_year: int,
         top_n_compounds: int = 10,
         delta_threshold: float = 0.001,
-        metrics_to_plot: Optional[List[str]] = None):
+        metrics_to_plot: Optional[List[str]] = None,
+        ):
         """
         Inicializa o gerador de relatórios.
         
