@@ -41,7 +41,7 @@ if __name__ == '__main__':
             start_year=start_year,
             end_year=current_year,
             model_type=model_type,
-            use_optuna=False,
+            use_optuna=True,
             optuna_trials=optuna_trials,
             optuna_timeout=3600
         )
