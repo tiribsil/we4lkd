@@ -37,8 +37,9 @@ class LoggerFactory:
     ) -> logging.Logger:
 
         logger = logging.getLogger(name)
-        if logger.handlers:
-            return logger
+        # Clear existing handlers to allow for reconfiguration
+        if logger.hasHandlers():
+            logger.handlers.clear()
 
         logger.setLevel(log_level)
 

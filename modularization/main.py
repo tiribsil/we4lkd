@@ -7,7 +7,7 @@ from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 
 if __name__ == '__main__':
     start_year = 1970
-    end_year = 2000
+    end_year = 2025
 
     disease = 'acute myeloid leukemia'
     model_type = 'w2v'
@@ -28,11 +28,13 @@ if __name__ == '__main__':
         preprocessing_module = Preprocessing(
             target_year=current_year,
             disease_name=disease,
-            target_year=current_year,
             incremental=True
         )
             
-        preprocessing_module.run(force_full=False)
+        success = preprocessing_module.run(force_full=False)
+        if not success:
+            print(f"Preprocessing failed for year {current_year}. Skipping to next year.")
+            continue
 
         embedding_trainer = EmbeddingTraining(
             disease_name=disease,
