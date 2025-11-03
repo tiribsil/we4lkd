@@ -43,14 +43,44 @@ def get_all_compounds(normalized_target_disease):
     print(f"Original compound list size: {len(all_compounds)}")
     print(f"Filtered compound list size (in model vocab): {len(compounds_in_model_vocab)}")
     return compounds_in_model_vocab
-    
+
+import pandas as pd
+import re
+from tqdm import tqdm
+from pathlib import Path
+
 def get_year_reported(abstracts_file, target_disease, compounds, threshold=3):
     """
-    Finds the first year a compound is mentioned with the target disease in an abstract,
-    with the compound mentioned at least 'threshold' times.
+    Finds the first year a compound is mentioned with the target disease in a therapeutic context.
+    
+    A therapeutic context is defined as:
+    1. The abstract contains the compound and the disease.
+    2. The abstract contains at least one therapeutic keyword.
+    3. The abstract contains NO non-therapeutic keywords.
+    4. The compound is mentioned at least 'threshold' times.
     """
+    # --- Start of New NLP Logic ---
+
+    # 1. DEFINE KEYWORD SETS (These are the brains of the heuristic)
+    # These lists are a starting point and can be customized for different disease areas.
+    THERAPEUTIC_KEYWORDS = {
+        'treat', 'treatment', 'therapy', 'therapeutic', 'efficacy', 'effective',
+        'clinical trial', 'patients', 'remission', 'response', 'inhibit', 
+        'antiproliferative', 'antitumor', 'antineoplastic', 'chemotherapy', 'regimen'
+    }
+
+    NON_THERAPEUTIC_KEYWORDS = {
+        'toxic', 'toxicity', 'carcinogen', 'carcinogenic', 'mutagen', 'mutagenic',
+        'side effect', 'adverse', 'poison', 'environmental', 'exposure', 'risk factor'
+    }
+    
+    # 2. CREATE EFFICIENT REGEX PATTERNS FROM KEYWORDS
+    # The \b ensures we match whole words only (e.g., 'treat' not 'treatment')
+    positive_regex = r'\b(?:' + '|'.join(THERAPEUTIC_KEYWORDS) + r')\b'
+    negative_regex = r'\b(?:' + '|'.join(NON_THERAPEUTIC_KEYWORDS) + r')\b'
+    # --- End of New NLP Logic ---
+
     if Path(abstracts_file).is_dir():
-        # If it's a directory (Spark output), read all part-xxxx.csv files
         csv_files = list(Path(abstracts_file).glob('*.csv'))
         if not csv_files:
             print(f"No CSV files found in Spark output directory: {abstracts_file}")
@@ -61,28 +91,41 @@ def get_year_reported(abstracts_file, target_disease, compounds, threshold=3):
             list_df.append(pd.read_csv(f))
         df = pd.concat(list_df, ignore_index=True)
     else:
-        # If it's a single file (older output format or non-Spark)
         df = pd.read_csv(abstracts_file)
+
     year_reported = {}
     
-    # Pre-compile regex for speed
     compound_regexes = {compound: re.compile(r'\b' + re.escape(compound) + r'\b', re.IGNORECASE) for compound in compounds}
     disease_regex = re.compile(r'\b' + re.escape(target_disease) + r'\b', re.IGNORECASE)
 
-    for compound in tqdm(compounds, desc="Finding year reported"):
-        # Find abstracts that contain both the compound and the disease
+    for compound in tqdm(compounds, desc="Finding year reported (with NLP context)"):
+        # Find abstracts that contain both the compound and the disease (original logic)
         compound_mentions_df = df[df['summary'].str.contains(compound_regexes[compound], na=False)]
         disease_mentions_df = compound_mentions_df[compound_mentions_df['summary'].str.contains(disease_regex, na=False)]
         
         if not disease_mentions_df.empty:
-            # Count compound occurrences in the summary for the filtered abstracts
-            compound_counts = disease_mentions_df['summary'].str.count(compound_regexes[compound])
             
-            # Filter for abstracts where compound count meets the threshold
-            eligible_mentions = disease_mentions_df[compound_counts >= threshold]
+            # --- Start of New Filtering Logic ---
 
-            if not eligible_mentions.empty:
-                year_reported[compound] = eligible_mentions['year_extracted'].min()
+            # 3. APPLY THE CONTEXTUAL FILTERS
+            # Filter for abstracts that contain at least one therapeutic keyword
+            contains_positive = disease_mentions_df['summary'].str.contains(positive_regex, case=False, na=False)
+            
+            # Filter for abstracts that DO NOT contain any non-therapeutic keywords
+            contains_negative = disease_mentions_df['summary'].str.contains(negative_regex, case=False, na=False)
+            
+            # Apply the filters to get a context-aware DataFrame
+            context_filtered_df = disease_mentions_df[contains_positive & ~contains_negative]
+
+            # --- End of New Filtering Logic ---
+
+            if not context_filtered_df.empty:
+                # 4. APPLY THE ORIGINAL THRESHOLD to the context-filtered results
+                compound_counts = context_filtered_df['summary'].str.count(compound_regexes[compound])
+                eligible_mentions = context_filtered_df[compound_counts >= threshold]
+
+                if not eligible_mentions.empty:
+                    year_reported[compound] = eligible_mentions['year_extracted'].min()
             
     return year_reported
 
