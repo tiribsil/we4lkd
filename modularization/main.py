@@ -36,17 +36,25 @@ if __name__ == '__main__':
             print(f"Preprocessing failed for year {current_year}. Skipping to next year.")
             continue
 
-        """embedding_trainer = EmbeddingTraining(
+        embedding_trainer = ParallelEmbeddingTrainingAutoML(
             disease_name=disease,
             start_year=start_year,
             end_year=current_year,
-            model_type=model_type,
-            use_optuna=True,
-            optuna_trials=optuna_trials,
-            optuna_timeout=3600
+            automl_config={
+                'candidate_models': [
+                    ModelType.WORD2VEC,
+                    ModelType.FASTTEXT,
+                    ModelType.PUBMEDBERT,
+                ],
+                'use_pca_variants': True,
+                'model_selection_time_budget': 1800,
+                'hyperopt_trials': 20,
+                'hyperopt_timeout': 900,
+            },
+            n_jobs=-1  # Use all available CPUs
         )
-        
-        embedding_trainer.run(year_over_year=False)
+    
+        success = embedding_trainer.run_automl()
 
         validator = ValidationModule(
             disease_name=disease,
@@ -65,5 +73,5 @@ if __name__ == '__main__':
         )
         
         # Executar pipeline
-        success = report_generator.run(generate_latex=True)"""
+        success = report_generator.run(generate_latex=True)
  
