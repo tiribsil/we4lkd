@@ -31,7 +31,10 @@ if __name__ == '__main__':
             incremental=True
         )
             
-        preprocessing_module.run(force_full=False)
+        success = preprocessing_module.run(force_full=False)
+        if not success:
+            print(f"Preprocessing failed for year {current_year}. Skipping to next year.")
+            continue
 
         """embedding_trainer = EmbeddingTraining(
             disease_name=disease,

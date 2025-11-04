@@ -48,7 +48,6 @@ class EmbeddingTraining:
     
     # Parâmetros padrão otimizados
     DEFAULT_W2V_PARAMS = [
-        {'vector_size': 100, 'alpha': 0.0025, 'negative': 10},
         {'vector_size': 200, 'alpha': 0.025, 'negative': 15}
     ]
     

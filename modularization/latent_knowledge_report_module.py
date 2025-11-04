@@ -400,7 +400,7 @@ class LatentKnowledgeReportGenerator:
 
     def feedback_new_topics(
         self,
-        max_new_topics: int = 4,
+        max_new_topics: int = 8,
         max_topics: int = 8
     ) -> None:
         """
@@ -683,7 +683,7 @@ class LatentKnowledgeReportGenerator:
             if top_txt_file:
                 self.logger.info(f"Potential treatments saved to {top_txt_file}")
                 self.logger.info("Running feedback loop to update topics_of_interest.txt...")
-                self.feedback_new_topics(max_new_topics=4)
+                self.feedback_new_topics()
             else:
                 self.logger.warning("Could not generate potential_treatments.txt")
 
