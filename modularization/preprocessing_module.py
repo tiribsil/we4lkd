@@ -466,7 +466,7 @@ class Preprocessing:
             # Access the broadcasted list of replacements.
             for term, replacement in broadcasted_replacements.value:
                 # Use re.sub for case-insensitive, whole-word replacement.
-                pattern = r'(?i)\\b' + re.escape(term) + r'\\b'
+                pattern = r'(?i)\b' + re.escape(term) + r'\b'
                 text = re.sub(pattern, replacement, text)
             return text
 
@@ -603,17 +603,20 @@ class Preprocessing:
         
         # Arquivo de saída principal
         output_file = self.clean_papers_path / "clean_abstracts.csv"
+
+        # If the main file doesn't exist, force a full run
+        if not output_file.exists():
+            self.logger.warning(f"Clean abstracts file not found at {output_file}. Forcing a full run.")
+            return self.clean_and_normalize()
+
         temp_dir = self.clean_papers_path / "temp_clean_abstracts"
         
-        # Se existir CSV anterior, carregamos e unimos
-        if output_file.exists():
-            self.logger.info(f"Appending new abstracts to existing CSV: {output_file}")
-            df_existing = self.spark.read.option("header", "true").csv(str(output_file))
-            df_combined = df_existing.unionByName(df_new_spark).dropDuplicates(subset=['summary'])
-        else:
-            df_combined = df_new_spark
+        # If the previous CSV exists, load and union it
+        self.logger.info(f"Appending new abstracts to existing CSV: {output_file}")
+        df_existing = self.spark.read.option("header", "true").csv(str(output_file))
+        df_combined = df_existing.unionByName(df_new_spark).dropDuplicates(subset=['summary'])
         
-        # Salvar no diretório temporário
+        # Save to a temporary directory
         df_combined.coalesce(1).write.mode('overwrite').option("header", "true").csv(str(temp_dir))
         
         # Mover e renomear part file para clean_abstracts.csv
@@ -629,7 +632,7 @@ class Preprocessing:
         """Limpa e normaliza abstracts usando PySpark (modo full)."""
         self.logger.info('Initializing full abstract cleaning using PySpark...')
 
-        txt_files = list(self.aggregated_abstracts_path.glob('*.txt'))
+        txt_files = list(self.aggregated_abstracts_path.glob('results_file_*.txt'))
         
         if not txt_files:
             self.logger.error(f"No .txt files found in {self.aggregated_abstracts_path}")
@@ -712,6 +715,17 @@ class Preprocessing:
         df_clean_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(output_file)
 
         self.logger.info(f'Full cleaning completed. Saved {df_clean_spark.count()} clean abstracts to {output_file}')
+
+        # Mark years as processed after a successful full run
+        processed_years_in_full_run = set()
+        for txt_file in txt_files:
+            year = self._extract_year_from_filename(txt_file)
+            if year:
+                processed_years_in_full_run.add(year)
+
+        for year in sorted(processed_years_in_full_run):
+            self._mark_year_as_processed(year)
+        self.logger.info(f"Marked years {sorted(processed_years_in_full_run)} as processed after full run.")
 
     # ============================================
     # --------- Download PubChem archives --------
@@ -818,11 +832,17 @@ class Preprocessing:
                     ner_data = self.process_abstracts(years=years_to_process)
                     if ner_data:
                         self.save_ner_table(ner_data, append=True)
+                    else:
+                        self.logger.warning("NER data is empty. Stopping.")
+                        return False
                 else:
                     self.logger.info("Processing NER for full corpus")
                     ner_data = self.process_abstracts()
                     if ner_data:
                         self.save_ner_table(ner_data, append=False)
+                    else:
+                        self.logger.warning("NER data is empty. Stopping.")
+                        return False
 
                 # Text cleaning
                 self.logger.info("=== Starting preprocessing pipeline ===")

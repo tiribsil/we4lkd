@@ -98,8 +98,7 @@ class LatentKnowledgeReportGenerator:
         """Cria estrutura de diretórios necessária."""
         try:
             directories = [
-                Path(f'{self.validation_path}/w2v/top_n_compounds'),
-                Path(f'{self.validation_path}/ft/top_n_compounds'),
+                Path(f'{self.validation_path}/top_n_compounds'),
                 Path(self.reports_path)
             ]
             
@@ -171,7 +170,7 @@ class LatentKnowledgeReportGenerator:
         if cache_key in self._compound_files_cache:
             return self._compound_files_cache[cache_key]
         
-        history_folder = Path(f'{self.validation_path}/{self.model_type}/compound_history')
+        history_folder = Path(f'{self.validation_path}/compound_history')
         
         self.logger.debug(f"Looking for compound files in: {history_folder}")
         
@@ -181,7 +180,7 @@ class LatentKnowledgeReportGenerator:
             return []
         
         # Buscar arquivos com o padrão correto
-        pattern = f'*_{self.model_type}.csv'
+        pattern = '*.csv'
         files = sorted(history_folder.glob(pattern))
         
         if not files:
@@ -201,7 +200,7 @@ class LatentKnowledgeReportGenerator:
     def _extract_chemical_name(self, file_path: Path) -> str:
         """Extrai nome químico do caminho do arquivo."""
         try:
-            name = file_path.stem.replace(f'_{self.model_type}', '')
+            name = file_path.stem
             # Substitui underscores por espaços
             return name.replace('_', ' ').strip()
         except Exception as e:
@@ -312,7 +311,7 @@ class LatentKnowledgeReportGenerator:
             Caminho do arquivo salvo ou None se erro
         """
         try:
-            output_dir = Path(f'{self.validation_path}/{self.model_type}/top_n_compounds/{str(year)}')
+            output_dir = Path(f'{self.validation_path}/top_n_compounds/{str(year)}')
             output_dir.mkdir(parents=True, exist_ok=True)
             
             output_file = Path(f'{output_dir}/top_{self.top_n_compounds}_{metric}.csv')
@@ -355,7 +354,7 @@ class LatentKnowledgeReportGenerator:
         start_year, end_year = self.year_range
 
         # Caminho do diretório do último ano
-        top_compounds_path = Path(f'{self.validation_path}/{self.model_type}/top_n_compounds/{str(end_year)}')
+        top_compounds_path = Path(f'{self.validation_path}/top_n_compounds/{str(end_year)}')
         score_files = list(top_compounds_path.glob(f'top_20_{metric}.csv'))
 
         if not score_files:
@@ -562,7 +561,7 @@ class LatentKnowledgeReportGenerator:
 
                 if df_list:
                     df_plot = pd.concat(df_list, ignore_index=True)
-                    output_dir = self.base_path / 'plots' / self.model_type / metric
+                    output_dir = self.base_path / 'plots' / metric
                     self.generate_historical_plots(df_plot, metrics=[metric], output_dir=output_dir)
                     plot_key = f'plot_{self.model_type}_{metric}'
                     plots_data[plot_key] = f'\\textit{{Plot saved for {metric}}}'
