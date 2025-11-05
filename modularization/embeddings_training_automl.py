@@ -30,8 +30,7 @@ try:
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
-    logging.warning("sentence-transformers not available")
-
+    
 
 class ModelType(Enum):
     """Supported embedding model types."""
