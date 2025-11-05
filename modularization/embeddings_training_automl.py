@@ -1,4 +1,5 @@
 import os
+from gensim.models import KeyedVectors
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
@@ -53,6 +54,8 @@ class EmbeddingConfig:
     pca_components: Optional[int] = None
     vector_size: int = 300
     custom_params: Dict[str, Any] = field(default_factory=dict)
+    # NOVO: Flag para usar embeddings pré-treinados
+    use_pretrained: bool = False
 
 
 @dataclass
@@ -70,6 +73,8 @@ class EvaluationMetrics:
     rank_correlation: float
     similarity_score: float
     intrinsic_score: float
+    domain_vocabulary_coverage: float = 0.0
+    embedding_variance: float = 0.0
     
     def to_dict(self) -> Dict[str, float]:
         return {k: v for k, v in self.__dict__.items()}
@@ -83,11 +88,13 @@ class EmbeddingEvaluator:
         n_clusters: int = 10, 
         k_neighbors: int = 10,
         test_compounds: Optional[List[str]] = None,
+        domain_vocabulary: Optional[List[str]] = None,
         random_state: int = 42
     ):
         self.n_clusters = n_clusters
         self.k_neighbors = k_neighbors
         self.test_compounds = test_compounds or []
+        self.domain_vocabulary = domain_vocabulary or []
         self.random_state = random_state
         self.logger = LoggerFactory.setup_logger("EmbeddingEvaluator", log_file="embeddings_training.log", log_to_file=True)
     
@@ -105,10 +112,10 @@ class EmbeddingEvaluator:
         normalized = sample_embeddings / norms
         
         cosine_sim = np.dot(normalized, normalized.T)
-        dot_product = np.dot(sample_embeddings, sample_embeddings.T)
+        dot_product = np.dot(normalized, normalized.T) 
         
         from scipy.spatial.distance import pdist, squareform
-        euclidean_dist = squareform(pdist(sample_embeddings, metric='euclidean'))
+        euclidean_dist = squareform(pdist(normalized, metric='euclidean'))
         euclidean_sim = 1 / (1 + euclidean_dist)
         
         upper_tri = np.triu_indices_from(cosine_sim, k=1)
@@ -125,11 +132,15 @@ class EmbeddingEvaluator:
         
         from sklearn.neighbors import NearestNeighbors
         
-        nbrs_cosine = NearestNeighbors(n_neighbors=self.k_neighbors + 1, metric='cosine').fit(embeddings)
-        _, indices_cosine = nbrs_cosine.kneighbors(embeddings)
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        normalized_embeddings = embeddings / norms
         
-        nbrs_euclidean = NearestNeighbors(n_neighbors=self.k_neighbors + 1, metric='euclidean').fit(embeddings)
-        _, indices_euclidean = nbrs_euclidean.kneighbors(embeddings)
+        nbrs_cosine = NearestNeighbors(n_neighbors=self.k_neighbors + 1, metric='cosine').fit(normalized_embeddings)
+        _, indices_cosine = nbrs_cosine.kneighbors(normalized_embeddings)
+        
+        nbrs_euclidean = NearestNeighbors(n_neighbors=self.k_neighbors + 1, metric='euclidean').fit(normalized_embeddings)
+        _, indices_euclidean = nbrs_euclidean.kneighbors(normalized_embeddings)
         
         overlaps = [
             len(set(indices_cosine[i][1:]) & set(indices_euclidean[i][1:])) / self.k_neighbors
@@ -151,9 +162,10 @@ class EmbeddingEvaluator:
         
         reference_norm = reference / (np.linalg.norm(reference) + 1e-8)
         sample_norms = sample_embeddings / (np.linalg.norm(sample_embeddings, axis=1, keepdims=True) + 1e-8)
+        
         cosine_dists = 1 - np.dot(sample_norms, reference_norm)
-        euclidean_dists = np.linalg.norm(sample_embeddings - reference, axis=1)
-        dot_dists = -np.dot(sample_embeddings, reference)
+        euclidean_dists = np.linalg.norm(sample_norms - reference_norm, axis=1)
+        dot_dists = -np.dot(sample_norms, reference_norm)
         
         corr_ce, _ = spearmanr(cosine_dists, euclidean_dists)
         corr_cd, _ = spearmanr(cosine_dists, dot_dists)
@@ -161,73 +173,136 @@ class EmbeddingEvaluator:
         
         return np.mean([abs(corr_ce), abs(corr_cd), abs(corr_ed)])
     
-    def _calculate_oov_handling(self, model_type: ModelType) -> float:
-        """Estimate OOV handling based on model type."""
-        # FastText has subword info
-        if model_type == ModelType.FASTTEXT:
-            return 0.8
-        # Transformers can handle any text
-        elif model_type in [ModelType.BIOBERT, ModelType.PUBMEDBERT, 
-                           ModelType.SCIBERT, ModelType.SBERT, ModelType.BIOCLINICALBERT]:
-            return 1.0
-        # Others have limited OOV handling
-        else:
-            return 0.3
+    def _calculate_oov_handling(
+        self, 
+        model,
+        model_type: ModelType, 
+        test_words: List[str]
+    ) -> float:
+        """Testa empiricamente a capacidade de lidar com palavras fora do vocabulário."""
+        if not test_words:
+            # Palavras de teste biomédicas incluindo variações
+            test_words = [
+                'leukemia', 'leukaemia', 'leucemia',  # Variações ortográficas
+                'cd34', 'cd38', 'flt3',  # Marcadores biomédicos
+                'chemotherapy', 'chemotherapeutic',  # Derivações
+                'xyzunknown123',  # Palavra inexistente
+            ]
+        
+        found = 0
+        for word in test_words:
+            try:
+                if model_type in [ModelType.BIOBERT, ModelType.PUBMEDBERT, 
+                                ModelType.SCIBERT, ModelType.SBERT, 
+                                ModelType.BIOCLINICALBERT]:
+                    # Transformers sempre conseguem embeddings
+                    found += 1
+                elif model_type == ModelType.FASTTEXT:
+                    # FastText usa subword
+                    _ = model.wv[word]
+                    found += 1
+                elif model_type == ModelType.GLOVE:
+                    # GloVe precisa ter a palavra exata
+                    if word in model.key_to_index:
+                        found += 1
+                elif model_type == ModelType.WORD2VEC:
+                    if word in model.wv:
+                        found += 1
+                elif model_type == ModelType.LSA:
+                    # LSA usa vectorizer
+                    if hasattr(model, 'vocabulary') and word in model.vocabulary:
+                        found += 1
+            except:
+                continue
+        
+        return found / len(test_words)
+    
+    def _calculate_domain_vocabulary_coverage(
+        self, vocabulary: Optional[List[str]], model_type: ModelType
+    ) -> float:
+        """NOVO: Calcula cobertura do vocabulário específico do domínio."""
+        if not vocabulary or not self.domain_vocabulary:
+            return 0.0
+        
+        vocab_set = set(v.lower() for v in vocabulary)
+        domain_set = set(v.lower() for v in self.domain_vocabulary)
+        
+        coverage = len(vocab_set & domain_set) / len(domain_set)
+        return coverage
+    
+    def _calculate_embedding_variance(self, embeddings: np.ndarray) -> float:
+        """NOVO: Calcula variância dos embeddings (diversidade)."""
+        # Normalizar primeiro
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        normalized = embeddings / norms
+
+        variance = np.var(normalized, axis=0).mean()
+        return float(variance)
     
     def evaluate(
         self,
         embeddings: np.ndarray,
         vocabulary: Optional[List[str]] = None,
         total_words: Optional[int] = None,
-        model_type: Optional[ModelType] = None
+        model_type: Optional[ModelType] = None,
+        model: Optional[Any] = None
     ) -> EvaluationMetrics:
         """Comprehensive evaluation for similarity-based tasks."""
         min_samples = max(self.n_clusters, self.k_neighbors + 1)
         if len(embeddings) < min_samples:
             self.logger.warning(f"Not enough samples ({len(embeddings)}) for evaluation")
             return EvaluationMetrics(0.0, 0.0, float('inf'), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        normalized_embeddings = embeddings / norms
         
         # Clustering metrics
         kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init=10)
-        cluster_labels = kmeans.fit_predict(embeddings)
+        cluster_labels = kmeans.fit_predict(normalized_embeddings)
         
-        silhouette = silhouette_score(embeddings, cluster_labels)
-        calinski = calinski_harabasz_score(embeddings, cluster_labels)
-        davies_bouldin = davies_bouldin_score(embeddings, cluster_labels)
+        silhouette = silhouette_score(normalized_embeddings, cluster_labels)
+        calinski = calinski_harabasz_score(normalized_embeddings, cluster_labels)
+        davies_bouldin = davies_bouldin_score(normalized_embeddings, cluster_labels)
         
         # Vocabulary coverage
         vocab_coverage = 1.0
         if vocabulary and total_words:
             vocab_coverage = len(vocabulary) / total_words
         
-        # OOV handling
-        oov_handling = self._calculate_oov_handling(model_type) if model_type else 0.5
+
+        domain_vocab_coverage = self._calculate_domain_vocabulary_coverage(vocabulary, model_type)
+        embedding_variance = self._calculate_embedding_variance(embeddings)
+
+        oov_handling = self._calculate_oov_handling(model, model_type, self.test_compounds) if model and model_type else 0.5
         
         # Similarity metrics
-        cosine_cons, euclidean_cons, dot_cons = self._calculate_similarity_consistency(embeddings)
-        neighborhood_pres = self._calculate_neighborhood_preservation(embeddings)
-        rank_corr = self._calculate_rank_correlation(embeddings)
+        cosine_cons, euclidean_cons, dot_cons = self._calculate_similarity_consistency(normalized_embeddings)
+        neighborhood_pres = self._calculate_neighborhood_preservation(normalized_embeddings)
+        rank_corr = self._calculate_rank_correlation(normalized_embeddings)
         
         # Normalize clustering metrics
         silhouette_norm = (silhouette + 1) / 2
         calinski_norm = min(calinski / 1000, 1.0)
         davies_bouldin_norm = 1 / (1 + davies_bouldin)
         
-        # Combined scores
+        # Combined scores - AJUSTADO: Dar mais peso à cobertura do domínio
         similarity_score = (
             0.25 * cosine_cons + 0.25 * euclidean_cons + 0.20 * dot_cons +
             0.15 * neighborhood_pres + 0.15 * rank_corr
         )
         
         intrinsic_score = (
-            0.15 * silhouette_norm + 0.10 * calinski_norm + 0.10 * davies_bouldin_norm +
-            0.10 * vocab_coverage + 0.15 * oov_handling + 0.40 * similarity_score
+            0.12 * silhouette_norm + 0.08 * calinski_norm + 0.08 * davies_bouldin_norm +
+            0.08 * vocab_coverage + 0.12 * oov_handling + 0.32 * similarity_score +
+            0.15 * domain_vocab_coverage + 0.05 * embedding_variance  # NOVO
         )
         
         return EvaluationMetrics(
             silhouette, calinski, davies_bouldin, vocab_coverage, oov_handling,
             cosine_cons, euclidean_cons, dot_cons, neighborhood_pres, rank_corr,
-            similarity_score, intrinsic_score
+            similarity_score, intrinsic_score, domain_vocab_coverage, embedding_variance
         )
 
 
@@ -276,7 +351,7 @@ class Word2VecModel(BaseEmbeddingModel):
             'negative': self.config.custom_params.get('negative', 10),
             'alpha': self.config.custom_params.get('alpha', 0.025),
             'epochs': self.config.custom_params.get('epochs', 15),
-            'workers': self.config.custom_params.get('workers', 1),  # Single worker for stability
+            'workers': self.config.custom_params.get('workers', 1),
         }
         self.model = Word2Vec(sentences=sentences, **params)
         self.logger.info(f"Word2Vec trained: {len(self.model.wv)} words")
@@ -310,7 +385,7 @@ class FastTextModel(BaseEmbeddingModel):
             'negative': self.config.custom_params.get('negative', 10),
             'alpha': self.config.custom_params.get('alpha', 0.025),
             'epochs': self.config.custom_params.get('epochs', 15),
-            'workers': self.config.custom_params.get('workers', 1),  # Single worker
+            'workers': self.config.custom_params.get('workers', 1),
             'min_n': self.config.custom_params.get('min_n', 3),
             'max_n': self.config.custom_params.get('max_n', 5),
         }
@@ -335,7 +410,7 @@ class FastTextModel(BaseEmbeddingModel):
 
 
 class GloVeModel(BaseEmbeddingModel):
-    """GloVe embedding model - PROCESS-SAFE VERSION."""
+    """GloVe embedding model"""
     
     GLOVE_URL = "http://nlp.stanford.edu/data/glove.6B.zip"
     GLOVE_FILENAME = "glove.6B.300d.txt"
@@ -350,23 +425,19 @@ class GloVeModel(BaseEmbeddingModel):
         w2v_path = os.path.join(glove_dir, GloVeModel.WORD2VEC_FILENAME)
         lock_path = os.path.join(glove_dir, ".download.lock")
         
-        # If already exists, return immediately
         if os.path.exists(w2v_path):
             return w2v_path
         
-        # Use file lock for process-safe download
         with open(lock_path, 'w') as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             
             try:
-                # Double-check after acquiring lock
                 if os.path.exists(w2v_path):
                     return w2v_path
                 
                 logger = logging.getLogger("GloVeDownloader")
                 glove_path = os.path.join(glove_dir, GloVeModel.GLOVE_FILENAME)
                 
-                # Download if needed
                 if not os.path.exists(glove_path):
                     zip_path = os.path.join(glove_dir, "glove.6B.zip")
                     logger.info(f"Downloading GloVe to {zip_path}...")
@@ -376,7 +447,6 @@ class GloVeModel(BaseEmbeddingModel):
                         zip_ref.extractall(glove_dir)
                     logger.info("Extraction complete")
                 
-                # Convert to word2vec format
                 logger.info("Converting GloVe to word2vec format...")
                 glove2word2vec(glove_path, w2v_path)
                 logger.info("Conversion complete")
@@ -386,16 +456,36 @@ class GloVeModel(BaseEmbeddingModel):
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     
     def train(self, sentences: List[List[str]], glove_dir: str = "./glove") -> None:
-        """Load GloVe embeddings (process-safe)."""
-        # Ensure downloaded in process-safe way
+        """Load GloVe embeddings"""
+        # NOVO: Opção para não usar pré-treinado
+        if not self.config.use_pretrained:
+            self.logger.warning("GloVe without pretraining is not supported. Using pretrained.")
+            self.logger.warning("Consider using Word2Vec or FastText for fair comparison.")
+        
         w2v_path = self._ensure_glove_downloaded(glove_dir)
         
-        # Load in current process (each process gets its own copy)
         self.logger.info(f"Loading GloVe from {w2v_path}...")
-        self.model = KeyedVectors.load_word2vec_format(w2v_path, binary=False)
-        self.logger.info(f"GloVe loaded: {len(self.model.key_to_index)} words")
+        full_model = KeyedVectors.load_word2vec_format(w2v_path, binary=False)
         
-        # Store sentences
+        # NOVO: Filtrar apenas palavras que aparecem no corpus
+        corpus_vocab = set(word.lower() for sent in sentences for word in sent)
+        
+        # Criar vocabulário filtrado
+        filtered_words = [w for w in full_model.key_to_index.keys() if w in corpus_vocab]
+        
+        if not filtered_words:
+            self.logger.warning("No GloVe words found in corpus! Using full GloVe.")
+            self.model = full_model
+        else:
+            # Criar modelo apenas com palavras do corpus
+            filtered_vectors = np.array([full_model[w] for w in filtered_words])
+            
+            
+            self.model = KeyedVectors(vector_size=full_model.vector_size)
+            self.model.add_vectors(filtered_words, filtered_vectors)
+            
+            self.logger.info(f"GloVe filtered: {len(filtered_words)} words (from {len(full_model)} total)")
+        
         self.sentences = [' '.join(sent) for sent in sentences]
     
     def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
@@ -478,31 +568,98 @@ class LSAModel(BaseEmbeddingModel):
 
 
 class TransformerModel(BaseEmbeddingModel):
-    """Transformer-based embedding models."""
+    """Transformer-based embedding models usando transformers diretamente."""
     
     MODEL_NAMES = {
         ModelType.BIOBERT: "dmis-lab/biobert-v1.1",
-        ModelType.PUBMEDBERT: "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract",
+        ModelType.PUBMEDBERT: "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
         ModelType.SCIBERT: "allenai/scibert_scivocab_uncased",
         ModelType.SBERT: "sentence-transformers/all-MiniLM-L6-v2",
         ModelType.BIOCLINICALBERT: "emilyalsentzer/Bio_ClinicalBERT",
     }
     
     def train(self, sentences: List[List[str]]) -> None:
-        if not TRANSFORMERS_AVAILABLE:
-            raise ImportError("sentence-transformers required")
-        
         model_name = self.MODEL_NAMES.get(self.config.model_type)
         if not model_name:
             raise ValueError(f"Unknown model: {self.config.model_type}")
         
         self.logger.info(f"Loading {model_name}...")
-        self.model = SentenceTransformer(model_name)
+        
+        # Tentar sentence-transformers primeiro (para SBERT)
+        if self.config.model_type == ModelType.SBERT:
+            if not TRANSFORMERS_AVAILABLE:
+                raise ImportError("sentence-transformers required for SBERT")
+            self.model = SentenceTransformer(model_name)
+            self.use_sentence_transformer = True
+        else:
+            # Usar transformers para outros modelos
+            try:
+                from transformers import AutoTokenizer, AutoModel
+                import torch
+                
+                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                self.model = AutoModel.from_pretrained(model_name)
+                self.use_sentence_transformer = False
+                
+                # Mover para GPU se disponível
+                self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                self.model.to(self.device)
+                self.model.eval()
+                
+                self.logger.info(f"Model loaded on {self.device}")
+            except ImportError:
+                raise ImportError("transformers library required. Install: pip install transformers torch")
+        
         self.sentences = [' '.join(sent) for sent in sentences]
+    
+    def _mean_pooling(self, model_output, attention_mask):
+        """Mean pooling para obter sentence embeddings."""
+        import torch
+        
+        token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
+        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
     
     def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
         texts = sentences if sentences else self.sentences
-        embeddings = self.model.encode(texts, show_progress_bar=True, batch_size=32)
+        
+        if self.use_sentence_transformer:
+            # Usar sentence-transformers normalmente
+            embeddings = self.model.encode(texts, show_progress_bar=True, batch_size=32)
+        else:
+            # Usar transformers manualmente
+            import torch
+            from tqdm import tqdm
+            
+            embeddings = []
+            batch_size = 32
+            
+            with torch.no_grad():
+                for i in tqdm(range(0, len(texts), batch_size), desc="Encoding"):
+                    batch_texts = texts[i:i+batch_size]
+                    
+                    # Tokenizar
+                    encoded = self.tokenizer(
+                        batch_texts,
+                        padding=True,
+                        truncation=True,
+                        max_length=512,
+                        return_tensors='pt'
+                    )
+                    
+                    # Mover para device
+                    encoded = {k: v.to(self.device) for k, v in encoded.items()}
+                    
+                    # Forward pass
+                    output = self.model(**encoded)
+                    
+                    # Mean pooling
+                    batch_embeddings = self._mean_pooling(output, encoded['attention_mask'])
+                    
+                    embeddings.append(batch_embeddings.cpu().numpy())
+            
+            embeddings = np.vstack(embeddings)
+        
         return self.apply_pca(embeddings)
 
 
@@ -551,18 +708,21 @@ def train_and_evaluate_single(
             vocabulary = list(model.model.wv.key_to_index.keys())
         elif hasattr(model.model, 'key_to_index'):
             vocabulary = list(model.model.key_to_index.keys())
+        elif hasattr(model.model, 'vocabulary'):
+            vocabulary = list(model.model['vocabulary'].keys())
         
         total_words = len(set(word for sent in sentences for word in sent))
         
         evaluator = EmbeddingEvaluator(**evaluator_params)
         metrics = evaluator.evaluate(
-            embeddings, vocabulary, total_words, config.model_type
+            embeddings, vocabulary, total_words, config.model_type, model.model  # NOVO: passar modelo
         )
         
         training_time = time.time() - start_time
         logger.info(
             f"✓ {config.model_type.value}: Score={metrics.intrinsic_score:.4f}, "
-            f"Time={training_time:.2f}s"
+            f"DomainCov={metrics.domain_vocabulary_coverage:.3f}, "
+            f"OOV={metrics.oov_handling:.3f}, Time={training_time:.2f}s"
         )
         
         # Clean up
@@ -576,7 +736,7 @@ def train_and_evaluate_single(
         logger.error(f"Error training {config.model_type.value}: {e}", exc_info=True)
         return (
             config, 
-            EvaluationMetrics(0.0, 0.0, float('inf'), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            EvaluationMetrics(0.0, 0.0, float('inf'), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
             time.time() - start_time
         )
 
@@ -589,10 +749,11 @@ class SequentialModelSelector:
         candidate_models: List[ModelType],
         use_pca_variants: bool = True,
         evaluator: Optional[EmbeddingEvaluator] = None,
+        domain_vocabulary: Optional[List[str]] = None,  # NOVO
     ):
         self.candidate_models = candidate_models
         self.use_pca_variants = use_pca_variants
-        self.evaluator = evaluator or EmbeddingEvaluator()
+        self.evaluator = evaluator or EmbeddingEvaluator(domain_vocabulary=domain_vocabulary)
         self.logger = LoggerFactory.setup_logger("SequentialModelSelector",log_file="embeddings_training.log", log_to_file=True)
         self.results = []
     
@@ -611,6 +772,7 @@ class SequentialModelSelector:
             'n_clusters': self.evaluator.n_clusters,
             'k_neighbors': self.evaluator.k_neighbors,
             'test_compounds': self.evaluator.test_compounds,
+            'domain_vocabulary': self.evaluator.domain_vocabulary,  # NOVO
             'random_state': self.evaluator.random_state,
         }
         
@@ -618,7 +780,10 @@ class SequentialModelSelector:
         screening_results = []
         for model_type in self.candidate_models:
             config = EmbeddingConfig(
-                model_type=model_type, use_pca=False, vector_size=vector_size
+                model_type=model_type, 
+                use_pca=False, 
+                vector_size=vector_size,
+                use_pretrained=(model_type == ModelType.GLOVE)  # NOVO: Flag explícita
             )
             config, metrics, train_time = train_and_evaluate_single(
                 config, sentences, evaluator_params
@@ -645,7 +810,8 @@ class SequentialModelSelector:
                         model_type=mt,
                         use_pca=use_pca,
                         pca_components=50 if use_pca else None,
-                        vector_size=vector_size
+                        vector_size=vector_size,
+                        use_pretrained=(mt == ModelType.GLOVE)
                     )
                     config, metrics, train_time = train_and_evaluate_single(
                         config, sentences, evaluator_params
@@ -665,6 +831,8 @@ class SequentialModelSelector:
         self.logger.info(f"\n{'='*80}")
         self.logger.info(f"Best: {best_result['config'].model_type.value}")
         self.logger.info(f"Score: {best_result['score']:.4f}")
+        self.logger.info(f"Domain Coverage: {best_result['metrics'].domain_vocabulary_coverage:.3f}")
+        self.logger.info(f"OOV Handling: {best_result['metrics'].oov_handling:.3f}")
         self.logger.info(f"Time: {total_time:.2f}s")
         self.logger.info(f"{'='*80}")
         
@@ -736,15 +904,21 @@ class SequentialHyperparameterOptimizer:
                 'min_df': trial.suggest_int('min_df', 1, 5),
                 'max_df': trial.suggest_float('max_df', 0.85, 0.95),
                 'use_tfidf': trial.suggest_categorical('use_tfidf', [True, False]),
+                'n_iter': trial.suggest_int('n_iter', 7, 15),
             })
         
         elif self.model_config.model_type in [ModelType.BIOBERT, ModelType.PUBMEDBERT, 
                                                 ModelType.SCIBERT, ModelType.SBERT, 
                                                 ModelType.BIOCLINICALBERT]:
-            params['batch_size'] = trial.suggest_categorical('batch_size', [16, 32, 64])
+            params.update({
+                'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64]),
+                'max_length': trial.suggest_categorical('max_length', [128, 256, 512]),
+            })
         
         if self.model_config.use_pca:
-            params['pca_components'] = trial.suggest_int('pca_components', 30, 200)
+            params.update({
+                'pca_components': trial.suggest_int('pca_components', 30, 200),
+            })
         
         return params
     
@@ -758,6 +932,7 @@ class SequentialHyperparameterOptimizer:
                 use_pca=self.model_config.use_pca,
                 pca_components=params.get('pca_components'),
                 vector_size=params.get('vector_size', self.model_config.vector_size),
+                use_pretrained=self.model_config.use_pretrained,
                 custom_params=params
             )
             
@@ -765,7 +940,11 @@ class SequentialHyperparameterOptimizer:
             model.train(sentences)
             embeddings = model.get_embeddings()
             
-            metrics = self.evaluator.evaluate(embeddings, model_type=config.model_type)
+            metrics = self.evaluator.evaluate(
+                embeddings, 
+                model_type=config.model_type,
+                model=model.model
+            )
             trial.report(metrics.intrinsic_score, step=0)
             
             # Clean up
@@ -801,7 +980,6 @@ class SequentialHyperparameterOptimizer:
             pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=3)
         )
         
-        # Use n_jobs=1 for sequential execution
         self.study.optimize(
             lambda trial: self._objective(trial, sentences),
             n_trials=self.n_trials,
@@ -840,6 +1018,7 @@ class SequentialEmbeddingAutoML:
         hyperopt_trials: int = 50,
         hyperopt_timeout: Optional[int] = None,
         output_dir: Optional[Path] = None,
+        domain_vocabulary: Optional[List[str]] = None,  # NOVO
     ):
         self.candidate_models = candidate_models or [
             ModelType.WORD2VEC, ModelType.FASTTEXT, ModelType.GLOVE,
@@ -850,6 +1029,7 @@ class SequentialEmbeddingAutoML:
         self.hyperopt_timeout = hyperopt_timeout
         self.output_dir = output_dir or Path('./automl_results')
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.domain_vocabulary = domain_vocabulary  # NOVO
         
         self.logger = LoggerFactory.setup_logger("SequentialEmbeddingAutoML",log_file="embeddings_training.log", log_to_file=True)
         
@@ -862,7 +1042,7 @@ class SequentialEmbeddingAutoML:
         sentences: List[List[str]],
         skip_model_selection: bool = False,
         initial_model_config: Optional[EmbeddingConfig] = None
-    ) -> Tuple[BaseEmbeddingModel, EvaluationMetrics]:
+    ) -> Tuple[BaseEmbeddingModel, EvaluationMetrics, str]:
         """Run complete sequential AutoML pipeline."""
         self.logger.info("\n" + "="*80)
         self.logger.info("SEQUENTIAL EMBEDDING AUTOML PIPELINE")
@@ -876,6 +1056,7 @@ class SequentialEmbeddingAutoML:
             selector = SequentialModelSelector(
                 candidate_models=self.candidate_models,
                 use_pca_variants=self.use_pca_variants,
+                domain_vocabulary=self.domain_vocabulary,  # NOVO
             )
             
             self.selected_model_config, _ = selector.select_best_model(sentences)
@@ -896,6 +1077,7 @@ class SequentialEmbeddingAutoML:
         
         optimizer = SequentialHyperparameterOptimizer(
             model_config=self.selected_model_config,
+            evaluator=EmbeddingEvaluator(domain_vocabulary=self.domain_vocabulary),  # NOVO
             n_trials=self.hyperopt_trials,
             timeout=self.hyperopt_timeout,
             study_name=f"hyperopt_{self.selected_model_config.model_type.value}",
@@ -915,6 +1097,7 @@ class SequentialEmbeddingAutoML:
             use_pca=self.selected_model_config.use_pca,
             pca_components=self.optimized_params.get('pca_components'),
             vector_size=self.optimized_params.get('vector_size', 300),
+            use_pretrained=self.selected_model_config.use_pretrained,
             custom_params=self.optimized_params
         )
         
@@ -922,11 +1105,14 @@ class SequentialEmbeddingAutoML:
         self.final_model.train(sentences)
         
         embeddings = self.final_model.get_embeddings()
-        evaluator = EmbeddingEvaluator()
-        final_metrics = evaluator.evaluate(embeddings, model_type=final_config.model_type)
+        evaluator = EmbeddingEvaluator(domain_vocabulary=self.domain_vocabulary)
+        final_metrics = evaluator.evaluate(
+            embeddings, 
+            model_type=final_config.model_type,
+            model=self.final_model.model
+        )
         
         total_time = time.time() - overall_start
-
         model_type = final_config.model_type.value
         
         # Summary
@@ -936,6 +1122,8 @@ class SequentialEmbeddingAutoML:
         self.logger.info(f"Model: {model_type}")
         self.logger.info(f"PCA: {final_config.use_pca}")
         self.logger.info(f"Score: {final_metrics.intrinsic_score:.4f}")
+        self.logger.info(f"Domain Coverage: {final_metrics.domain_vocabulary_coverage:.3f}")
+        self.logger.info(f"OOV Handling: {final_metrics.oov_handling:.3f}")
         self.logger.info(f"Time: {total_time:.2f}s ({total_time/60:.1f} min)")
         self.logger.info("="*80)
         
@@ -943,6 +1131,7 @@ class SequentialEmbeddingAutoML:
         config_dict = {
             'model_type': model_type,
             'use_pca': final_config.use_pca,
+            'use_pretrained': final_config.use_pretrained,
             'pca_components': final_config.pca_components,
             'vector_size': final_config.vector_size,
             'optimized_params': self.optimized_params,
@@ -954,7 +1143,6 @@ class SequentialEmbeddingAutoML:
         with open(config_path, 'w') as f:
             json.dump(config_dict, f, indent=2)
         self.logger.info(f"Config saved: {config_path}")
-        
         
         return self.final_model, final_metrics, model_type
     
@@ -1013,6 +1201,7 @@ class SequentialEmbeddingTrainingAutoML:
             log_file="embeddings_training.log"
         )
         self._corpus_df = None
+        self._domain_vocabulary = None  # NOVO
         
         self.logger.info(f"Initialized for {self.disease_name}")
         self.logger.info(f"Years: {start_year}-{end_year}")
@@ -1051,6 +1240,23 @@ class SequentialEmbeddingTrainingAutoML:
             self._corpus_df = self._load_corpus()
         return self._corpus_df
     
+    def _extract_domain_vocabulary(self, sentences: List[List[str]]) -> List[str]:
+        """NOVO: Extrair vocabulário específico do domínio."""
+        if self._domain_vocabulary is not None:
+            return self._domain_vocabulary
+        
+        from collections import Counter
+        
+        # Contar frequência de todas as palavras
+        word_freq = Counter(word.lower() for sent in sentences for word in sent)
+        
+        # Palavras que aparecem entre 10 e 1000 vezes (filtro heurístico)
+        domain_words = [word for word, freq in word_freq.items() if 10 <= freq <= 1000]
+        
+        self.logger.info(f"Extracted {len(domain_words)} domain-specific words")
+        self._domain_vocabulary = domain_words
+        return domain_words
+    
     def _prepare_sentences(self, year_filter: Optional[int] = None) -> List[List[str]]:
         """Prepare sentences for training."""
         df = self.corpus_df
@@ -1081,21 +1287,28 @@ class SequentialEmbeddingTrainingAutoML:
                 self.logger.error(f"Insufficient data: {len(sentences)} sentences")
                 return False
             
+            # NOVO: Extrair vocabulário do domínio
+            domain_vocab = self._extract_domain_vocabulary(sentences)
+            
             automl = SequentialEmbeddingAutoML(
                 candidate_models=self.automl_config['candidate_models'],
                 use_pca_variants=self.automl_config['use_pca_variants'],
                 hyperopt_trials=self.automl_config['hyperopt_trials'],
                 hyperopt_timeout=self.automl_config['hyperopt_timeout'],
                 output_dir=self.models_path / f'{self.start_year}_{self.end_year}',
+                domain_vocabulary=domain_vocab,  # NOVO
             )
             
             initial_config = None
             if skip_model_selection and force_model_type:
                 initial_config = EmbeddingConfig(
-                    model_type=force_model_type, use_pca=False, vector_size=300
+                    model_type=force_model_type, 
+                    use_pca=False, 
+                    vector_size=300,
+                    use_pretrained=(force_model_type == ModelType.GLOVE)
                 )
             
-            final_model, _ , model_type = automl.run(sentences, skip_model_selection, initial_config)
+            final_model, _, model_type = automl.run(sentences, skip_model_selection, initial_config)
             
             model_path = Path(f'{self.models_path}/{model_type}_{self.start_year}_{self.end_year}.model')
             automl.save_model(model_path)
@@ -1131,9 +1344,6 @@ if __name__ == '__main__':
                 ModelType.FASTTEXT,
                 ModelType.GLOVE,
                 ModelType.LSA,
-                # Add transformer models if you have enough memory
-                # ModelType.BIOBERT,
-                # ModelType.PUBMEDBERT,
             ],
             'use_pca_variants': True,
             'hyperopt_trials': 20,
