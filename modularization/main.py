@@ -1,13 +1,13 @@
 from data_collection_module import DataCollection
 from preprocessing_module import Preprocessing
-from embeddings_training_module import EmbeddingTraining
+from embeddings_training_automl import SequentialEmbeddingTrainingAutoML, ModelType
 from dotproduct_generation_module import ValidationModule
 from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 
 
 if __name__ == '__main__':
     start_year = 1990
-    end_year = 2000
+    end_year = 1992
 
     disease = 'acute myeloid leukemia'
     model_type = 'w2v'
@@ -36,7 +36,7 @@ if __name__ == '__main__':
             print(f"Preprocessing failed for year {current_year}. Skipping to next year.")
             continue
 
-        embedding_trainer = ParallelEmbeddingTrainingAutoML(
+        embedding_trainer = SequentialEmbeddingTrainingAutoML(
             disease_name=disease,
             start_year=start_year,
             end_year=current_year,
@@ -44,15 +44,21 @@ if __name__ == '__main__':
                 'candidate_models': [
                     ModelType.WORD2VEC,
                     ModelType.FASTTEXT,
+                    ModelType.GLOVE,
+                    ModelType.LSA,
+                    ModelType.BIOBERT,
                     ModelType.PUBMEDBERT,
+                    ModelType.SCIBERT,
+                    ModelType.SBERT,
+                    ModelType.BIOCLINICALBERT
                 ],
                 'use_pca_variants': True,
                 'model_selection_time_budget': 1800,
-                'hyperopt_trials': 20,
+                'hyperopt_trials': 5,
                 'hyperopt_timeout': 900,
             },
-            n_jobs=-1  # Use all available CPUs
         )
+        
     
         success = embedding_trainer.run_automl()
 

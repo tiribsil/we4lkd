@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Any, Union
+from typing import List, Dict, Optional, Tuple, Any
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.decomposition import TruncatedSVD
 import wget
@@ -17,10 +17,9 @@ from sklearn.cluster import KMeans
 import optuna
 from optuna.trial import Trial
 import logging
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import cpu_count
 import time
 import json
+import gc
 
 from utils import LoggerFactory, normalize_disease_name
 
@@ -90,7 +89,7 @@ class EmbeddingEvaluator:
         self.k_neighbors = k_neighbors
         self.test_compounds = test_compounds or []
         self.random_state = random_state
-        self.logger = LoggerFactory.setup_logger("EmbeddingEvaluator", log_to_file=True)
+        self.logger = LoggerFactory.setup_logger("EmbeddingEvaluator", log_file="embeddings_training.log", log_to_file=True)
     
     def _calculate_similarity_consistency(
         self, embeddings: np.ndarray, n_samples: int = 100
@@ -101,12 +100,10 @@ class EmbeddingEvaluator:
         indices = np.random.choice(len(embeddings), n_samples, replace=False)
         sample_embeddings = embeddings[indices]
         
-        # Normalize for cosine similarity
         norms = np.linalg.norm(sample_embeddings, axis=1, keepdims=True)
         norms[norms == 0] = 1
         normalized = sample_embeddings / norms
         
-        # Calculate similarities
         cosine_sim = np.dot(normalized, normalized.T)
         dot_product = np.dot(sample_embeddings, sample_embeddings.T)
         
@@ -114,7 +111,6 @@ class EmbeddingEvaluator:
         euclidean_dist = squareform(pdist(sample_embeddings, metric='euclidean'))
         euclidean_sim = 1 / (1 + euclidean_dist)
         
-        # Calculate consistency (lower std = higher consistency)
         upper_tri = np.triu_indices_from(cosine_sim, k=1)
         cosine_std = np.std(cosine_sim[upper_tri])
         dot_std = np.std(dot_product[upper_tri])
@@ -153,54 +149,37 @@ class EmbeddingEvaluator:
         sample_indices = np.random.choice(len(embeddings), n_samples, replace=False)
         sample_embeddings = embeddings[sample_indices]
         
-        # Calculate distances
         reference_norm = reference / (np.linalg.norm(reference) + 1e-8)
         sample_norms = sample_embeddings / (np.linalg.norm(sample_embeddings, axis=1, keepdims=True) + 1e-8)
         cosine_dists = 1 - np.dot(sample_norms, reference_norm)
         euclidean_dists = np.linalg.norm(sample_embeddings - reference, axis=1)
         dot_dists = -np.dot(sample_embeddings, reference)
         
-        # Spearman correlations
         corr_ce, _ = spearmanr(cosine_dists, euclidean_dists)
         corr_cd, _ = spearmanr(cosine_dists, dot_dists)
         corr_ed, _ = spearmanr(euclidean_dists, dot_dists)
         
         return np.mean([abs(corr_ce), abs(corr_cd), abs(corr_ed)])
     
-    def _calculate_oov_handling(self, model, vocabulary: Optional[List[str]] = None) -> float:
-        """Evaluate Out-of-Vocabulary handling capability."""
-        if not self.test_compounds or not vocabulary:
-            # Estimate based on model type
-            if hasattr(model, 'wv') and hasattr(model.wv, 'vectors_ngrams'):
-                return 0.8
-            return 0.3
-        
-        oov_compounds = [c for c in self.test_compounds if c not in vocabulary]
-        if not oov_compounds:
+    def _calculate_oov_handling(self, model_type: ModelType) -> float:
+        """Estimate OOV handling based on model type."""
+        # FastText has subword info
+        if model_type == ModelType.FASTTEXT:
+            return 0.8
+        # Transformers can handle any text
+        elif model_type in [ModelType.BIOBERT, ModelType.PUBMEDBERT, 
+                           ModelType.SCIBERT, ModelType.SBERT, ModelType.BIOCLINICALBERT]:
             return 1.0
-        
-        handled = sum(1 for compound in oov_compounds if self._can_get_embedding(model, compound))
-        return handled / len(oov_compounds)
-    
-    def _can_get_embedding(self, model, word: str) -> bool:
-        """Check if model can get embedding for word."""
-        try:
-            if hasattr(model, '__getitem__'):
-                _ = model[word]
-            elif hasattr(model, 'wv'):
-                _ = model.wv[word]
-            else:
-                return False
-            return True
-        except:
-            return False
+        # Others have limited OOV handling
+        else:
+            return 0.3
     
     def evaluate(
         self,
         embeddings: np.ndarray,
         vocabulary: Optional[List[str]] = None,
         total_words: Optional[int] = None,
-        model: Optional[Any] = None
+        model_type: Optional[ModelType] = None
     ) -> EvaluationMetrics:
         """Comprehensive evaluation for similarity-based tasks."""
         min_samples = max(self.n_clusters, self.k_neighbors + 1)
@@ -222,7 +201,7 @@ class EmbeddingEvaluator:
             vocab_coverage = len(vocabulary) / total_words
         
         # OOV handling
-        oov_handling = self._calculate_oov_handling(model, vocabulary)
+        oov_handling = self._calculate_oov_handling(model_type) if model_type else 0.5
         
         # Similarity metrics
         cosine_cons, euclidean_cons, dot_cons = self._calculate_similarity_consistency(embeddings)
@@ -259,7 +238,7 @@ class BaseEmbeddingModel:
         self.config = config
         self.model = None
         self.pca = None
-        self.logger = LoggerFactory.setup_logger("BaseEmbeddingModel", log_to_file=True)
+        self.logger = LoggerFactory.setup_logger("BaseEmbeddingModel", log_file="embeddings_training.log", log_to_file=True)
     
     def train(self, sentences: List[List[str]]) -> None:
         raise NotImplementedError
@@ -297,14 +276,13 @@ class Word2VecModel(BaseEmbeddingModel):
             'negative': self.config.custom_params.get('negative', 10),
             'alpha': self.config.custom_params.get('alpha', 0.025),
             'epochs': self.config.custom_params.get('epochs', 15),
-            'workers': self.config.custom_params.get('workers', 4),
+            'workers': self.config.custom_params.get('workers', 1),  # Single worker for stability
         }
         self.model = Word2Vec(sentences=sentences, **params)
         self.logger.info(f"Word2Vec trained: {len(self.model.wv)} words")
     
     def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
         if sentences:
-            # Average word vectors for sentences
             embeddings = []
             for sentence in sentences:
                 words = sentence.lower().split()
@@ -332,7 +310,7 @@ class FastTextModel(BaseEmbeddingModel):
             'negative': self.config.custom_params.get('negative', 10),
             'alpha': self.config.custom_params.get('alpha', 0.025),
             'epochs': self.config.custom_params.get('epochs', 15),
-            'workers': self.config.custom_params.get('workers', 4),
+            'workers': self.config.custom_params.get('workers', 1),  # Single worker
             'min_n': self.config.custom_params.get('min_n', 3),
             'max_n': self.config.custom_params.get('max_n', 5),
         }
@@ -357,83 +335,67 @@ class FastTextModel(BaseEmbeddingModel):
 
 
 class GloVeModel(BaseEmbeddingModel):
-    """GloVe embedding model with sentence support - FIXED."""
+    """GloVe embedding model - PROCESS-SAFE VERSION."""
     
     GLOVE_URL = "http://nlp.stanford.edu/data/glove.6B.zip"
     GLOVE_FILENAME = "glove.6B.300d.txt"
     WORD2VEC_FILENAME = "glove.6B.300d.word2vec.txt"
     
-    # Class-level cache for shared embeddings
-    _cached_embeddings = {}
-    _cache_lock = None
-    
-    @classmethod
-    def _get_cache_lock(cls):
-        """Get or create thread lock for cache."""
-        if cls._cache_lock is None:
-            import threading
-            cls._cache_lock = threading.Lock()
-        return cls._cache_lock
-    
-    @classmethod
-    def get_or_load_glove(cls, glove_dir: str = "./glove") -> KeyedVectors:
-        """Load GloVe once and cache it (thread-safe)."""
-        glove_dir = str(glove_dir)
+    @staticmethod
+    def _ensure_glove_downloaded(glove_dir: str) -> str:
+        """Download and convert GloVe if needed (process-safe)."""
+        import fcntl
         
-        # Check cache first (fast path, no lock needed)
-        if glove_dir in cls._cached_embeddings:
-            return cls._cached_embeddings[glove_dir]
+        os.makedirs(glove_dir, exist_ok=True)
+        w2v_path = os.path.join(glove_dir, GloVeModel.WORD2VEC_FILENAME)
+        lock_path = os.path.join(glove_dir, ".download.lock")
         
-        # Acquire lock for loading
-        lock = cls._get_cache_lock()
-        with lock:
-            # Double-check after acquiring lock
-            if glove_dir in cls._cached_embeddings:
-                return cls._cached_embeddings[glove_dir]
+        # If already exists, return immediately
+        if os.path.exists(w2v_path):
+            return w2v_path
+        
+        # Use file lock for process-safe download
+        with open(lock_path, 'w') as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             
-            # Load GloVe
-            logger = LoggerFactory.setup_logger("GloVeLoader", log_to_file=True)
-            os.makedirs(glove_dir, exist_ok=True)
-            
-            glove_path = os.path.join(glove_dir, cls.GLOVE_FILENAME)
-            w2v_path = os.path.join(glove_dir, cls.WORD2VEC_FILENAME)
-            
-            # Download if needed
-            if not os.path.exists(glove_path):
-                zip_path = os.path.join(glove_dir, "glove.6B.zip")
-                logger.info(f"Downloading GloVe to {zip_path}...")
-                wget.download(cls.GLOVE_URL, zip_path)
-                logger.info("============ Extracting... ============")
-                with ZipFile(zip_path, "r") as zip_ref:
-                    zip_ref.extractall(glove_dir)
-                logger.info("Extraction complete")
-            
-            # Convert to word2vec format if needed
-            if not os.path.exists(w2v_path):
+            try:
+                # Double-check after acquiring lock
+                if os.path.exists(w2v_path):
+                    return w2v_path
+                
+                logger = logging.getLogger("GloVeDownloader")
+                glove_path = os.path.join(glove_dir, GloVeModel.GLOVE_FILENAME)
+                
+                # Download if needed
+                if not os.path.exists(glove_path):
+                    zip_path = os.path.join(glove_dir, "glove.6B.zip")
+                    logger.info(f"Downloading GloVe to {zip_path}...")
+                    wget.download(GloVeModel.GLOVE_URL, zip_path)
+                    logger.info("\nExtracting...")
+                    with ZipFile(zip_path, "r") as zip_ref:
+                        zip_ref.extractall(glove_dir)
+                    logger.info("Extraction complete")
+                
+                # Convert to word2vec format
                 logger.info("Converting GloVe to word2vec format...")
                 glove2word2vec(glove_path, w2v_path)
                 logger.info("Conversion complete")
-            
-            # Load embeddings
-            logger.info(f"Loading GloVe from {w2v_path}...")
-            embeddings = KeyedVectors.load_word2vec_format(w2v_path, binary=False)
-            logger.info(f"GloVe loaded: {len(embeddings.key_to_index)} words")
-            
-            # Cache it
-            cls._cached_embeddings[glove_dir] = embeddings
-            return embeddings
+                
+                return w2v_path
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     
     def train(self, sentences: List[List[str]], glove_dir: str = "./glove") -> None:
-        """Load GloVe embeddings using cache."""
-        # Input validation
-        if not isinstance(glove_dir, (str, os.PathLike)):
-            raise TypeError(f"glove_dir must be string/path, got {type(glove_dir)}")
+        """Load GloVe embeddings (process-safe)."""
+        # Ensure downloaded in process-safe way
+        w2v_path = self._ensure_glove_downloaded(glove_dir)
         
-        # Use cached loader
-        self.model = self.get_or_load_glove(glove_dir)
-        self.logger.info(f"Using cached GloVe: {len(self.model.key_to_index)} words")
+        # Load in current process (each process gets its own copy)
+        self.logger.info(f"Loading GloVe from {w2v_path}...")
+        self.model = KeyedVectors.load_word2vec_format(w2v_path, binary=False)
+        self.logger.info(f"GloVe loaded: {len(self.model.key_to_index)} words")
         
-        # Store sentences for later use
+        # Store sentences
         self.sentences = [' '.join(sent) for sent in sentences]
     
     def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
@@ -443,7 +405,6 @@ class GloVeModel(BaseEmbeddingModel):
         else:
             texts = getattr(self, 'sentences', [])
             if not texts:
-                # Fallback to all word embeddings
                 return self.apply_pca(self.model.vectors)
         
         embeddings = []
@@ -471,7 +432,6 @@ class LSAModel(BaseEmbeddingModel):
     def train(self, sentences: List[List[str]]) -> None:
         documents = [' '.join(sentence) for sentence in sentences]
         
-        # Vectorization
         use_tfidf = self.config.custom_params.get('use_tfidf', True)
         VectorizerClass = TfidfVectorizer if use_tfidf else CountVectorizer
         
@@ -487,7 +447,6 @@ class LSAModel(BaseEmbeddingModel):
         doc_term_matrix = self.vectorizer.fit_transform(documents)
         self.vocabulary = self.vectorizer.vocabulary_
         
-        # SVD
         self.svd = TruncatedSVD(
             n_components=self.config.vector_size,
             random_state=42,
@@ -571,18 +530,17 @@ class ModelFactory:
         return model_class(config)
 
 
-def _train_and_evaluate_config(
+def train_and_evaluate_single(
     config: EmbeddingConfig,
     sentences: List[List[str]],
     evaluator_params: Dict[str, Any],
-    worker_id: int
 ) -> Tuple[EmbeddingConfig, EvaluationMetrics, float]:
-    """Worker function for parallel execution."""
-    logger = LoggerFactory.setup_logger("Worker", log_to_file=True)
+    """Sequential training and evaluation (NO multiprocessing)."""
+    logger = LoggerFactory.setup_logger("ModelTrainer",log_file="embeddings_training.log", log_to_file=True)
     start_time = time.time()
     
     try:
-        logger.info(f"[Worker {worker_id}] Evaluating {config.model_type.value}")
+        logger.info(f"Training {config.model_type.value}...")
         
         model = ModelFactory.create_model(config)
         model.train(sentences)
@@ -597,52 +555,57 @@ def _train_and_evaluate_config(
         total_words = len(set(word for sent in sentences for word in sent))
         
         evaluator = EmbeddingEvaluator(**evaluator_params)
-        metrics = evaluator.evaluate(embeddings, vocabulary, total_words, model.model)
+        metrics = evaluator.evaluate(
+            embeddings, vocabulary, total_words, config.model_type
+        )
         
         training_time = time.time() - start_time
-        logger.info(f"[Worker {worker_id}] Model: {config.model_type.value} Score: {metrics.intrinsic_score:.4f}, Time: {training_time:.2f}s")
+        logger.info(
+            f"✓ {config.model_type.value}: Score={metrics.intrinsic_score:.4f}, "
+            f"Time={training_time:.2f}s"
+        )
+        
+        # Clean up
+        del model
+        del embeddings
+        gc.collect()
         
         return config, metrics, training_time
         
     except Exception as e:
-        logger.error(f"[Worker {worker_id}] Error: {e}")
-        return config, EvaluationMetrics(0.0, 0.0, float('inf'), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), time.time() - start_time
+        logger.error(f"Error training {config.model_type.value}: {e}", exc_info=True)
+        return (
+            config, 
+            EvaluationMetrics(0.0, 0.0, float('inf'), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            time.time() - start_time
+        )
 
 
-class ParallelModelSelector:
-    """Parallel model selection with efficient search."""
+class SequentialModelSelector:
+    """Sequential model selection (avoids multiprocessing issues)."""
     
     def __init__(
         self,
         candidate_models: List[ModelType],
         use_pca_variants: bool = True,
         evaluator: Optional[EmbeddingEvaluator] = None,
-        n_jobs: int = -1,
     ):
         self.candidate_models = candidate_models
         self.use_pca_variants = use_pca_variants
         self.evaluator = evaluator or EmbeddingEvaluator()
-        self.n_jobs = max(1, cpu_count() - 1 if n_jobs == -1 else min(n_jobs, cpu_count()))
-        self.logger = LoggerFactory.setup_logger("ParallelModelSelector", log_to_file=True)
+        self.logger = LoggerFactory.setup_logger("SequentialModelSelector",log_file="embeddings_training.log", log_to_file=True)
         self.results = []
-        
-        self.logger.info(f"ParallelModelSelector: {self.n_jobs} workers")
     
     def select_best_model(
         self, sentences: List[List[str]], vector_size: int = 300
     ) -> Tuple[EmbeddingConfig, EvaluationMetrics]:
-        """Select best model using parallel search."""
+        """Select best model sequentially."""
         self.logger.info("="*80)
-        self.logger.info("PARALLEL MODEL SELECTION")
+        self.logger.info("SEQUENTIAL MODEL SELECTION")
         self.logger.info(f"Models: {[m.value for m in self.candidate_models]}")
-        self.logger.info(f"Workers: {self.n_jobs}")
         self.logger.info("="*80)
         
         start_time = time.time()
-        
-        # Phase 1: Quick screening
-        configs = [EmbeddingConfig(model_type=mt, use_pca=False, vector_size=vector_size) 
-                   for mt in self.candidate_models]
         
         evaluator_params = {
             'n_clusters': self.evaluator.n_clusters,
@@ -651,55 +614,48 @@ class ParallelModelSelector:
             'random_state': self.evaluator.random_state,
         }
         
+        # Phase 1: Quick screening
         screening_results = []
-        with ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
-            futures = {
-                executor.submit(_train_and_evaluate_config, cfg, sentences, evaluator_params, i): cfg
-                for i, cfg in enumerate(configs)
-            }
-            
-            for future in as_completed(futures):
-                try:
-                    config, metrics, train_time = future.result()
-                    screening_results.append({
-                        'config': config, 'metrics': metrics, 
-                        'score': metrics.intrinsic_score, 'training_time': train_time
-                    })
-                    self.logger.info(f"✓ {config.model_type.value}: {metrics.intrinsic_score:.3f}")
-                except Exception as e:
-                    self.logger.error(f"Failed: {e}")
+        for model_type in self.candidate_models:
+            config = EmbeddingConfig(
+                model_type=model_type, use_pca=False, vector_size=vector_size
+            )
+            config, metrics, train_time = train_and_evaluate_single(
+                config, sentences, evaluator_params
+            )
+            screening_results.append({
+                'config': config,
+                'metrics': metrics,
+                'score': metrics.intrinsic_score,
+                'training_time': train_time
+            })
         
         screening_results.sort(key=lambda x: x['score'], reverse=True)
         
-        # Phase 2: Detailed evaluation of top models
+        # Phase 2: Try PCA on top models
+        detailed_results = []
         top_k = min(3, len(screening_results))
-        detailed_configs = []
+        
         for result in screening_results[:top_k]:
             mt = result['config'].model_type
-            for use_pca in ([False, True] if self.use_pca_variants else [False]):
-                detailed_configs.append(EmbeddingConfig(
-                    model_type=mt, use_pca=use_pca, 
-                    pca_components=50 if use_pca else None, vector_size=vector_size
-                ))
-        
-        detailed_results = []
-        with ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
-            futures = {
-                executor.submit(_train_and_evaluate_config, cfg, sentences, evaluator_params, i): cfg
-                for i, cfg in enumerate(detailed_configs)
-            }
             
-            for future in as_completed(futures):
-                try:
-                    config, metrics, train_time = future.result()
+            if self.use_pca_variants:
+                for use_pca in [False, True]:
+                    config = EmbeddingConfig(
+                        model_type=mt,
+                        use_pca=use_pca,
+                        pca_components=50 if use_pca else None,
+                        vector_size=vector_size
+                    )
+                    config, metrics, train_time = train_and_evaluate_single(
+                        config, sentences, evaluator_params
+                    )
                     detailed_results.append({
-                        'config': config, 'metrics': metrics,
-                        'score': metrics.intrinsic_score, 'training_time': train_time
+                        'config': config,
+                        'metrics': metrics,
+                        'score': metrics.intrinsic_score,
+                        'training_time': train_time
                     })
-                    pca_str = f"PCA={config.use_pca}"
-                    self.logger.info(f"✓ {config.model_type.value} ({pca_str}): {metrics.intrinsic_score:.3f}")
-                except Exception as e:
-                    self.logger.error(f"Failed: {e}")
         
         # Combine and find best
         self.results = screening_results + detailed_results
@@ -731,8 +687,8 @@ class ParallelModelSelector:
         return pd.DataFrame(data).sort_values('intrinsic_score', ascending=False)
 
 
-class ParallelHyperparameterOptimizer:
-    """Parallel hyperparameter optimization using Optuna."""
+class SequentialHyperparameterOptimizer:
+    """Sequential hyperparameter optimization using Optuna."""
     
     def __init__(
         self,
@@ -742,7 +698,6 @@ class ParallelHyperparameterOptimizer:
         timeout: Optional[int] = None,
         study_name: Optional[str] = None,
         storage_path: Optional[str] = None,
-        n_jobs: int = -1,
     ):
         self.model_config = model_config
         self.evaluator = evaluator or EmbeddingEvaluator()
@@ -754,10 +709,8 @@ class ParallelHyperparameterOptimizer:
             storage_path = f"./{self.study_name}.db"
         self.storage = f"sqlite:///{storage_path}"
         
-        self.n_jobs = max(1, cpu_count() - 1 if n_jobs == -1 else min(n_jobs, cpu_count()))
-        self.logger = LoggerFactory.setup_logger("ParallelHyperparameterOptimizer", log_to_file=True)
+        self.logger = LoggerFactory.setup_logger("SequentialHyperparameterOptimizer",log_file="embeddings_training.log", log_to_file=True)
         self.study = None
-        self.logger.info(f"ParallelHyperparameterOptimizer: {self.n_jobs} workers")
     
     def _get_search_space(self, trial: Trial) -> Dict[str, Any]:
         """Define search space based on model type."""
@@ -812,8 +765,13 @@ class ParallelHyperparameterOptimizer:
             model.train(sentences)
             embeddings = model.get_embeddings()
             
-            metrics = self.evaluator.evaluate(embeddings)
+            metrics = self.evaluator.evaluate(embeddings, model_type=config.model_type)
             trial.report(metrics.intrinsic_score, step=0)
+            
+            # Clean up
+            del model
+            del embeddings
+            gc.collect()
             
             if trial.should_prune():
                 raise optuna.TrialPruned()
@@ -827,11 +785,11 @@ class ParallelHyperparameterOptimizer:
             return 0.0
     
     def optimize(self, sentences: List[List[str]]) -> Tuple[Dict[str, Any], float]:
-        """Optimize hyperparameters in parallel."""
+        """Optimize hyperparameters sequentially."""
         self.logger.info("="*80)
-        self.logger.info("PARALLEL HYPERPARAMETER OPTIMIZATION")
+        self.logger.info("SEQUENTIAL HYPERPARAMETER OPTIMIZATION")
         self.logger.info(f"Model: {self.model_config.model_type.value}")
-        self.logger.info(f"Trials: {self.n_trials}, Workers: {self.n_jobs}")
+        self.logger.info(f"Trials: {self.n_trials}")
         self.logger.info("="*80)
         
         self.study = optuna.create_study(
@@ -843,11 +801,12 @@ class ParallelHyperparameterOptimizer:
             pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=3)
         )
         
+        # Use n_jobs=1 for sequential execution
         self.study.optimize(
             lambda trial: self._objective(trial, sentences),
             n_trials=self.n_trials,
             timeout=self.timeout,
-            n_jobs=self.n_jobs,
+            n_jobs=1,
             show_progress_bar=True
         )
         
@@ -871,38 +830,32 @@ class ParallelHyperparameterOptimizer:
         return self.study.trials_dataframe().sort_values('value', ascending=False)
 
 
-class ParallelEmbeddingAutoML:
-    """Complete parallel AutoML pipeline for embeddings."""
+class SequentialEmbeddingAutoML:
+    """Complete sequential AutoML pipeline for embeddings (NO multiprocessing)."""
     
     def __init__(
         self,
         candidate_models: Optional[List[ModelType]] = None,
         use_pca_variants: bool = True,
-        model_selection_time_budget: int = 3600,
         hyperopt_trials: int = 50,
         hyperopt_timeout: Optional[int] = None,
         output_dir: Optional[Path] = None,
-        n_jobs: int = -1,
     ):
         self.candidate_models = candidate_models or [
             ModelType.WORD2VEC, ModelType.FASTTEXT, ModelType.GLOVE,
             ModelType.LSA, ModelType.BIOBERT, ModelType.PUBMEDBERT
         ]
         self.use_pca_variants = use_pca_variants
-        self.model_selection_time_budget = model_selection_time_budget
         self.hyperopt_trials = hyperopt_trials
         self.hyperopt_timeout = hyperopt_timeout
         self.output_dir = output_dir or Path('./automl_results')
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        self.n_jobs = max(1, cpu_count() - 1 if n_jobs == -1 else min(n_jobs, cpu_count()))
-        self.logger = LoggerFactory.setup_logger("ParallelEmbeddingAutoML", log_to_file=True)
+        self.logger = LoggerFactory.setup_logger("SequentialEmbeddingAutoML",log_file="embeddings_training.log", log_to_file=True)
         
         self.selected_model_config = None
         self.optimized_params = None
         self.final_model = None
-        
-        self.logger.info(f"ParallelEmbeddingAutoML: {self.n_jobs} workers")
     
     def run(
         self,
@@ -910,10 +863,9 @@ class ParallelEmbeddingAutoML:
         skip_model_selection: bool = False,
         initial_model_config: Optional[EmbeddingConfig] = None
     ) -> Tuple[BaseEmbeddingModel, EvaluationMetrics]:
-        """Run complete parallel AutoML pipeline."""
+        """Run complete sequential AutoML pipeline."""
         self.logger.info("\n" + "="*80)
-        self.logger.info("PARALLEL EMBEDDING AUTOML PIPELINE")
-        self.logger.info(f"Workers: {self.n_jobs}")
+        self.logger.info("SEQUENTIAL EMBEDDING AUTOML PIPELINE")
         self.logger.info("="*80)
         
         overall_start = time.time()
@@ -921,10 +873,9 @@ class ParallelEmbeddingAutoML:
         # Phase 1: Model Selection
         if not skip_model_selection:
             self.logger.info("\n📊 PHASE 1: MODEL SELECTION")
-            selector = ParallelModelSelector(
+            selector = SequentialModelSelector(
                 candidate_models=self.candidate_models,
                 use_pca_variants=self.use_pca_variants,
-                n_jobs=self.n_jobs
             )
             
             self.selected_model_config, _ = selector.select_best_model(sentences)
@@ -943,13 +894,12 @@ class ParallelEmbeddingAutoML:
         self.logger.info("\n🔧 PHASE 2: HYPERPARAMETER OPTIMIZATION")
         storage_path = str(self.output_dir / 'optuna_study.db')
         
-        optimizer = ParallelHyperparameterOptimizer(
+        optimizer = SequentialHyperparameterOptimizer(
             model_config=self.selected_model_config,
             n_trials=self.hyperopt_trials,
             timeout=self.hyperopt_timeout,
             study_name=f"hyperopt_{self.selected_model_config.model_type.value}",
             storage_path=storage_path,
-            n_jobs=self.n_jobs
         )
         
         self.optimized_params, best_score = optimizer.optimize(sentences)
@@ -973,15 +923,17 @@ class ParallelEmbeddingAutoML:
         
         embeddings = self.final_model.get_embeddings()
         evaluator = EmbeddingEvaluator()
-        final_metrics = evaluator.evaluate(embeddings)
+        final_metrics = evaluator.evaluate(embeddings, model_type=final_config.model_type)
         
         total_time = time.time() - overall_start
+
+        model_type = final_config.model_type.value
         
         # Summary
         self.logger.info("\n" + "="*80)
         self.logger.info("AUTOML PIPELINE COMPLETE")
         self.logger.info("="*80)
-        self.logger.info(f"Model: {final_config.model_type.value}")
+        self.logger.info(f"Model: {model_type}")
         self.logger.info(f"PCA: {final_config.use_pca}")
         self.logger.info(f"Score: {final_metrics.intrinsic_score:.4f}")
         self.logger.info(f"Time: {total_time:.2f}s ({total_time/60:.1f} min)")
@@ -989,14 +941,13 @@ class ParallelEmbeddingAutoML:
         
         # Save configuration
         config_dict = {
-            'model_type': final_config.model_type.value,
+            'model_type': model_type,
             'use_pca': final_config.use_pca,
             'pca_components': final_config.pca_components,
             'vector_size': final_config.vector_size,
             'optimized_params': self.optimized_params,
             'final_metrics': final_metrics.to_dict(),
             'total_time': total_time,
-            'n_workers': self.n_jobs
         }
         
         config_path = self.output_dir / 'final_config.json'
@@ -1004,7 +955,8 @@ class ParallelEmbeddingAutoML:
             json.dump(config_dict, f, indent=2)
         self.logger.info(f"Config saved: {config_path}")
         
-        return self.final_model, final_metrics
+        
+        return self.final_model, final_metrics, model_type
     
     def save_model(self, path: Path) -> None:
         """Save final trained model."""
@@ -1024,8 +976,8 @@ class ParallelEmbeddingAutoML:
         self.logger.info(f"Model saved: {path}")
 
 
-class ParallelEmbeddingTrainingAutoML:
-    """Enhanced embedding training with parallel AutoML."""
+class SequentialEmbeddingTrainingAutoML:
+    """Enhanced embedding training with sequential AutoML (PROCESS-SAFE)."""
     
     def __init__(
         self,
@@ -1033,40 +985,37 @@ class ParallelEmbeddingTrainingAutoML:
         start_year: int,
         end_year: int,
         automl_config: Optional[Dict[str, Any]] = None,
-        n_jobs: int = -1,
     ):
         self.disease_name = normalize_disease_name(disease_name)
         self.start_year = start_year
         self.end_year = end_year
-        self.n_jobs = max(1, cpu_count() - 1 if n_jobs == -1 else min(n_jobs, cpu_count()))
         
         self.base_path = Path(f'./data/{self.disease_name}')
         self.corpus_path = Path(f'{self.base_path}/corpus/clean_abstracts/clean_abstracts.csv')
-        self.models_path = Path(f'{self.base_path}/models/automl')
+        self.models_path = Path(f'{self.base_path}/models')
         self.models_path.mkdir(parents=True, exist_ok=True)
         
         default_config = {
             'candidate_models': [
                 ModelType.WORD2VEC, ModelType.FASTTEXT, ModelType.GLOVE,
-                ModelType.BIOBERT, ModelType.PUBMEDBERT
+                ModelType.LSA,
             ],
             'use_pca_variants': True,
-            'model_selection_time_budget': 3600,
             'hyperopt_trials': 30,
             'hyperopt_timeout': 1800,
         }
         self.automl_config = {**default_config, **(automl_config or {})}
         
         self.logger = LoggerFactory.setup_logger(
-            "ParallelEmbeddingTrainingAutoML",
+            "SequentialEmbeddingTrainingAutoML",
             target_year=str(start_year),
-            log_to_file=True
+            log_to_file=True,
+            log_file="embeddings_training.log"
         )
         self._corpus_df = None
         
         self.logger.info(f"Initialized for {self.disease_name}")
         self.logger.info(f"Years: {start_year}-{end_year}")
-        self.logger.info(f"Workers: {self.n_jobs}")
     
     def _load_corpus(self) -> Optional[pd.DataFrame]:
         """Load corpus from path."""
@@ -1124,7 +1073,7 @@ class ParallelEmbeddingTrainingAutoML:
         skip_model_selection: bool = False,
         force_model_type: Optional[ModelType] = None
     ) -> bool:
-        """Run parallel AutoML pipeline."""
+        """Run sequential AutoML pipeline."""
         try:
             sentences = self._prepare_sentences(year_filter or self.end_year)
             
@@ -1132,14 +1081,12 @@ class ParallelEmbeddingTrainingAutoML:
                 self.logger.error(f"Insufficient data: {len(sentences)} sentences")
                 return False
             
-            automl = ParallelEmbeddingAutoML(
+            automl = SequentialEmbeddingAutoML(
                 candidate_models=self.automl_config['candidate_models'],
                 use_pca_variants=self.automl_config['use_pca_variants'],
-                model_selection_time_budget=self.automl_config['model_selection_time_budget'],
                 hyperopt_trials=self.automl_config['hyperopt_trials'],
                 hyperopt_timeout=self.automl_config['hyperopt_timeout'],
                 output_dir=self.models_path / f'{self.start_year}_{self.end_year}',
-                n_jobs=self.n_jobs
             )
             
             initial_config = None
@@ -1148,9 +1095,9 @@ class ParallelEmbeddingTrainingAutoML:
                     model_type=force_model_type, use_pca=False, vector_size=300
                 )
             
-            final_model, _ = automl.run(sentences, skip_model_selection, initial_config)
+            final_model, _ , model_type = automl.run(sentences, skip_model_selection, initial_config)
             
-            model_path = self.models_path / f'model_{self.start_year}_{self.end_year}.model'
+            model_path = Path(f'{self.models_path}/{model_type}_{self.start_year}_{self.end_year}.model')
             automl.save_model(model_path)
             
             self.logger.info("AutoML pipeline completed successfully")
@@ -1173,7 +1120,8 @@ class ParallelEmbeddingTrainingAutoML:
 
 
 if __name__ == '__main__':
-    automl_trainer = ParallelEmbeddingTrainingAutoML(
+    # IMPORTANT: Use Sequential version to avoid multiprocessing issues
+    automl_trainer = SequentialEmbeddingTrainingAutoML(
         disease_name="acute myeloid leukemia",
         start_year=1990,
         end_year=2000,
@@ -1183,18 +1131,14 @@ if __name__ == '__main__':
                 ModelType.FASTTEXT,
                 ModelType.GLOVE,
                 ModelType.LSA,
-                ModelType.BIOBERT,
-                ModelType.PUBMEDBERT,
-                ModelType.SCIBERT,
-                ModelType.SBERT,
-                ModelType.BIOCLINICALBERT
+                # Add transformer models if you have enough memory
+                # ModelType.BIOBERT,
+                # ModelType.PUBMEDBERT,
             ],
             'use_pca_variants': True,
-            'model_selection_time_budget': 1800,
             'hyperopt_trials': 20,
             'hyperopt_timeout': 900,
         },
-        n_jobs=-1
     )
     
     success = automl_trainer.run_automl()
