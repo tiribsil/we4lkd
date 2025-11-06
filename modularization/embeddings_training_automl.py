@@ -880,22 +880,39 @@ class SequentialHyperparameterOptimizer:
         self.study = None
     
     def _get_search_space(self, trial: Trial) -> Dict[str, Any]:
-        """Define search space based on model type."""
-        params = {}
+        """Define espaço de busca de hiperparâmetros com Optuna."""
+        params: Dict[str, Any] = {}
         
         if self.model_config.model_type in [ModelType.WORD2VEC, ModelType.FASTTEXT]:
             params.update({
                 'vector_size': trial.suggest_categorical('vector_size', [100, 200, 300, 400]),
                 'window': trial.suggest_int('window', 3, 10),
                 'min_count': trial.suggest_int('min_count', 1, 5),
-                'sg': trial.suggest_categorical('sg', [0, 1]),
+                'sg': trial.suggest_categorical('sg', [0, 1]),  # skip-gram vs CBOW
+                'hs': trial.suggest_categorical('hs', [0, 1]),  # hierarchical softmax
                 'negative': trial.suggest_int('negative', 5, 20),
                 'alpha': trial.suggest_float('alpha', 0.001, 0.05, log=True),
+                'min_alpha': trial.suggest_float('min_alpha', 1e-5, 0.01, log=True),
+                'sample': trial.suggest_float('sample', 1e-6, 1e-2, log=True),
+                'ns_exponent': trial.suggest_float('ns_exponent', 0.5, 1.0),
+                'cbow_mean': trial.suggest_categorical('cbow_mean', [0, 1]),
                 'epochs': trial.suggest_int('epochs', 10, 30),
             })
             if self.model_config.model_type == ModelType.FASTTEXT:
                 params['min_n'] = trial.suggest_int('min_n', 2, 4)
-                params['max_n'] = trial.suggest_int('max_n', 4, 7)
+                params['max_n'] = trial.suggest_int('max_n', 5, 8)
+                # 'bucket' e 'word_ngrams' podem ser fixos (usualmente bucket grande, word_ngrams=1)
+        
+        elif self.model_config.model_type == ModelType.GLOVE:
+            params.update({
+                'vector_size': trial.suggest_categorical('vector_size', [100, 200, 300]),
+                'window_size': trial.suggest_int('window_size', 5, 15),
+                'max_iter': trial.suggest_int('max_iter', 10, 50),
+                'x_max': trial.suggest_int('x_max', 50, 200),
+                'alpha': trial.suggest_float('alpha', 0.5, 1.0),
+                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
+                'min_count': trial.suggest_int('min_count', 1, 5),
+            })
         
         elif self.model_config.model_type == ModelType.LSA:
             params.update({
@@ -903,21 +920,27 @@ class SequentialHyperparameterOptimizer:
                 'min_df': trial.suggest_int('min_df', 1, 5),
                 'max_df': trial.suggest_float('max_df', 0.85, 0.95),
                 'use_tfidf': trial.suggest_categorical('use_tfidf', [True, False]),
-                'n_iter': trial.suggest_int('n_iter', 7, 15),
+                'n_components': trial.suggest_int('n_components', 50, 300),
+                'n_iter': trial.suggest_int('n_iter', 5, 15),
             })
         
-        elif self.model_config.model_type in [ModelType.BIOBERT, ModelType.PUBMEDBERT, 
-                                                ModelType.SCIBERT, ModelType.SBERT, 
-                                                ModelType.BIOCLINICALBERT]:
+        elif self.model_config.model_type in [
+            ModelType.BIOBERT, ModelType.PUBMEDBERT, ModelType.SCIBERT, 
+            ModelType.SBERT, ModelType.BIOCLINICALBERT
+        ]:
             params.update({
                 'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64]),
                 'max_length': trial.suggest_categorical('max_length', [128, 256, 512]),
+                'learning_rate': trial.suggest_float('learning_rate', 1e-6, 5e-5, log=True),
+                'num_epochs': trial.suggest_int('num_epochs', 2, 5),
+                'weight_decay': trial.suggest_float('weight_decay', 0.0, 0.3),
+                'warmup_ratio': trial.suggest_float('warmup_ratio', 0.0, 0.3),
+                'dropout': trial.suggest_float('dropout', 0.1, 0.5),
+                'pooling_strategy': trial.suggest_categorical('pooling_strategy', ['cls', 'mean', 'max']),
             })
         
         if self.model_config.use_pca:
-            params.update({
-                'pca_components': trial.suggest_int('pca_components', 30, 200),
-            })
+            params['pca_components'] = trial.suggest_int('pca_components', 30, 200)
         
         return params
     
