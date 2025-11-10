@@ -58,7 +58,7 @@ class LatentKnowledgeReportGenerator:
             metrics_to_plot: Lista de métricas para plotar
             base_dir: Diretório base do projeto (se None, usa diretório atual)
         """
-        self.logger = LoggerFactory.setup_logger("report_generator", str(target_year), log_to_file=False)
+        self.logger = LoggerFactory.setup_logger("report_generator", str(target_year), log_to_file=True, log_file=f'logs/{target_year}.log')
         
         self.disease_name = disease_name
         self.normalized_disease_name = normalize_disease_name(disease_name)

@@ -1,7 +1,8 @@
+from utils import *
 from data_collection_module import DataCollection
 from preprocessing_module import Preprocessing
 from embeddings_training_automl import SequentialEmbeddingTrainingAutoML, ModelType
-from dotproduct_generation_module import ValidationModule
+#from dotproduct_generation_module import ValidationModule
 from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 
 
@@ -14,7 +15,8 @@ if __name__ == '__main__':
     optuna_trials = 5 #quantas vezes o optuna vai rodar o modelo para encontrar os melhores hiperparâmetros -quanto maior o valor, mais tempo demora, mas melhor fica o modelo final
 
     for current_year in range(start_year, end_year + 1):
-        print(f"{'='*20} Processing year: {current_year} {'='*20}")
+        logger = LoggerFactory.setup_logger("we4lkd", target_year=str(current_year), log_to_file=True, log_file=f'logs/{current_year}.log')
+        logger.info(f"{'='*20} Processing year: {current_year} {'='*20}")
 
         data_collection_module = DataCollection(
             disease_name="acute myeloid leukemia",
@@ -33,7 +35,7 @@ if __name__ == '__main__':
             
         success = preprocessing_module.run(force_full=False)
         if not success:
-            print(f"Preprocessing failed for year {current_year}. Skipping to next year.")
+            logger.error(f"Preprocessing failed for year {current_year}. Skipping to next year.")
             continue
 
         embedding_trainer = SequentialEmbeddingTrainingAutoML(
@@ -62,10 +64,11 @@ if __name__ == '__main__':
     
         success = embedding_trainer.run_automl()
 
-        validator = ValidationModule(
+        """validator = ValidationModule(
             disease_name=disease,
             start_year=start_year,
-            end_year = current_year
+            end_year=current_year,
+            use_chembl=True  # Will try ChEMBL, fallback to PubChem only
         )
         
         validator.run()
@@ -80,4 +83,4 @@ if __name__ == '__main__':
         
         # Executar pipeline
         success = report_generator.run(generate_latex=True)
- 
+ """

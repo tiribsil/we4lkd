@@ -17,7 +17,7 @@ class DataCollection:
     def __init__(self, disease_name: str, target_year: int, max_workers: int = 4, 
                  expand_synonyms: bool = False, filter_synonyms: bool = True):
         load_dotenv()
-        self.logger = LoggerFactory.setup_logger("data_collection", target_year=str(target_year), log_to_file=False)
+        self.logger = LoggerFactory.setup_logger("data_collection", target_year=str(target_year), log_to_file=True,log_file=f'logs/{target_year}.log')
         self.disease_name = self.normalize_disease_name(disease_name)
         self.target_year = target_year
         self.retmax_papers = 9998  # Máximo permitido pelo NCBI

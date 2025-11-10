@@ -16,6 +16,16 @@ import warnings
 import pickle
 import torch
 
+def _get_chembl_client():
+    """Lazy import of ChEMBL client to avoid import-time errors."""
+    try:
+        from chembl_webresource_client.new_client import new_client
+        return new_client
+    except Exception as e:
+        warnings.warn(f"ChEMBL client unavailable: {e}")
+        return None
+
+
 class ModelType(Enum):
     """Supported embedding model types."""
     WORD2VEC = "word2vec"
@@ -71,7 +81,8 @@ class ValidationModule:
         disease_name: str,
         start_year: int,
         end_year: int,
-        biomolecule_blacklist: Optional[Set[str]] = None
+        biomolecule_blacklist: Optional[Set[str]] = None,
+        use_chembl: bool = True
     ):
         """
         Initialize validation module.
@@ -81,13 +92,15 @@ class ValidationModule:
             start_year: Starting year of the corpus
             end_year: Ending year of the corpus
             biomolecule_blacklist: Set of generic molecules to exclude
+            use_chembl: Whether to attempt loading ChEMBL data (default: True)
         """
-        self.logger = LoggerFactory.setup_logger("validation", str(start_year), log_to_file=False)
+        self.logger = LoggerFactory.setup_logger("validation", str(end_year), log_to_file=True, log_file=f'logs/{end_year}.log')
         warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API", category=UserWarning)
         
         self.disease_name = normalize_disease_name(disease_name)
         self.start_year = start_year
         self.end_year = end_year
+        self.use_chembl = use_chembl
         
         self.embedding_method = 'da'  # ['da', 'avg']
         
@@ -113,6 +126,7 @@ class ValidationModule:
         self._therapeutic_compounds = None
         self._models_cache = {}
         self._model_types_by_year = {}  # Armazena tipo de modelo por ano
+        self._chembl_client = None
         
         # Device para transformers
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -120,7 +134,19 @@ class ValidationModule:
         self.logger.info(f"ValidationModule initialized for {self.disease_name}")
         self.logger.info(f"Years: {start_year}-{end_year}")
         self.logger.info(f"Device: {self.device}")
+        self.logger.info(f"ChEMBL enabled: {use_chembl}")
         self._detect_available_models()
+
+    def _get_chembl_client_safe(self):
+        """Get ChEMBL client with error handling."""
+        if not self.use_chembl:
+            return None
+            
+        if self._chembl_client is None:
+            self._chembl_client = _get_chembl_client()
+            if self._chembl_client is None:
+                self.logger.warning("ChEMBL client unavailable - will skip ChEMBL data")
+        return self._chembl_client
 
     def _detect_available_models(self) -> None:
         """Detecta modelos disponíveis no diretório e seus tipos."""
@@ -157,11 +183,16 @@ class ValidationModule:
     @lru_cache(maxsize=1)
     def _load_chembl_drugs(self) -> Set[str]:
         """Carrega lista de small molecule drugs do ChEMBL (cached)."""
+        client = self._get_chembl_client_safe()
+        if client is None:
+            self.logger.warning("Skipping ChEMBL data loading")
+            return set()
+        
         self.logger.info("Loading small molecule drugs from ChEMBL...")
         drug_names_set = set()
         
         try:
-            molecule = new_client.molecule
+            molecule = client.molecule
             
             # Filtrar apenas small molecules aprovadas ou em fase avançada
             approved_drugs_query = molecule.filter(
@@ -191,6 +222,7 @@ class ValidationModule:
             
         except Exception as e:
             self.logger.error(f"Error loading ChEMBL data: {e}")
+            self.logger.info("Continuing without ChEMBL data...")
             return set()
 
     def _load_pubchem_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -236,11 +268,10 @@ class ValidationModule:
         
         self.logger.info("Cache not found. Generating whitelist...")
         
-        # Carregar dados ChEMBL
+        # Carregar dados ChEMBL (com fallback se indisponível)
         chembl_drugs = self._load_chembl_drugs()
         if not chembl_drugs:
-            self.logger.error("Could not load ChEMBL data")
-            return set()
+            self.logger.warning("No ChEMBL data available - will use only PubChem data")
         
         # Carregar dados PubChem
         try:
@@ -249,36 +280,42 @@ class ValidationModule:
             self.logger.error(str(e))
             return set()
         
-        # Normalizar sinônimos PubChem
-        self.logger.info("Mapping ChEMBL drugs to PubChem CIDs...")
-        synonyms_df['synonym_normalized'] = (
-            synonyms_df['synonym']
-            .str.lower()
-            .str.replace(r'\s+', '', regex=True)
-        )
-        synonyms_df.dropna(subset=['synonym_normalized', 'cid'], inplace=True)
-        
-        # Criar DataFrame com termos ChEMBL
-        chembl_df = pd.DataFrame(
-            list(chembl_drugs),
-            columns=['chembl_term_normalized']
-        )
-        
-        # Match com PubChem
-        matched_cids_df = pd.merge(
-            chembl_df,
-            synonyms_df,
-            left_on='chembl_term_normalized',
-            right_on='synonym_normalized',
-            how='inner'
-        )
-        
-        unique_cids = matched_cids_df['cid'].unique()
-        self.logger.info(f"Found {len(unique_cids)} unique CIDs")
-        
-        # Buscar títulos canônicos
-        self.logger.info("Fetching canonical titles...")
-        therapeutic_titles_df = titles_df[titles_df['cid'].isin(unique_cids)]
+        # Se temos dados ChEMBL, fazer matching
+        if chembl_drugs:
+            # Normalizar sinônimos PubChem
+            self.logger.info("Mapping ChEMBL drugs to PubChem CIDs...")
+            synonyms_df['synonym_normalized'] = (
+                synonyms_df['synonym']
+                .str.lower()
+                .str.replace(r'\s+', '', regex=True)
+            )
+            synonyms_df.dropna(subset=['synonym_normalized', 'cid'], inplace=True)
+            
+            # Criar DataFrame com termos ChEMBL
+            chembl_df = pd.DataFrame(
+                list(chembl_drugs),
+                columns=['chembl_term_normalized']
+            )
+            
+            # Match com PubChem
+            matched_cids_df = pd.merge(
+                chembl_df,
+                synonyms_df,
+                left_on='chembl_term_normalized',
+                right_on='synonym_normalized',
+                how='inner'
+            )
+            
+            unique_cids = matched_cids_df['cid'].unique()
+            self.logger.info(f"Found {len(unique_cids)} unique CIDs")
+            
+            # Buscar títulos canônicos
+            self.logger.info("Fetching canonical titles...")
+            therapeutic_titles_df = titles_df[titles_df['cid'].isin(unique_cids)]
+        else:
+            # Sem ChEMBL, usar todos os títulos PubChem
+            self.logger.info("Using all PubChem titles as therapeutic compounds")
+            therapeutic_titles_df = titles_df
         
         # Normalizar títulos
         normalized_titles = (

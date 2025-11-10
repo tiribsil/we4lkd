@@ -53,8 +53,8 @@ class EmbeddingConfig:
     pca_components: Optional[int] = None
     vector_size: int = 300
     custom_params: Dict[str, Any] = field(default_factory=dict)
-    # NOVO: Flag para usar embeddings pré-treinados
-    use_pretrained: bool = False
+    use_pretrained: bool = False  
+    end_year: int = None
 
 
 @dataclass
@@ -83,19 +83,26 @@ class EmbeddingEvaluator:
     """Evaluates embedding quality for similarity-based tasks."""
     
     def __init__(
-        self, 
+        self,
+        end_year: Optional[int] = None,
         n_clusters: int = 10, 
         k_neighbors: int = 10,
         test_compounds: Optional[List[str]] = None,
         domain_vocabulary: Optional[List[str]] = None,
-        random_state: int = 42
+        random_state: int = 42,
     ):
         self.n_clusters = n_clusters
         self.k_neighbors = k_neighbors
         self.test_compounds = test_compounds or []
         self.domain_vocabulary = domain_vocabulary or []
         self.random_state = random_state
-        self.logger = LoggerFactory.setup_logger("EmbeddingEvaluator", log_file="embeddings_training.log", log_to_file=True)
+        self.end_year = end_year
+        self.logger = LoggerFactory.setup_logger(
+            name="EmbeddingEvaluator",
+            target_year=str(self.end_year),
+            log_to_file=True,
+            log_file=f'logs/{self.end_year}.log'
+        )
     
     def _calculate_similarity_consistency(
         self, embeddings: np.ndarray, n_samples: int = 100
@@ -312,7 +319,13 @@ class BaseEmbeddingModel:
         self.config = config
         self.model = None
         self.pca = None
-        self.logger = LoggerFactory.setup_logger("BaseEmbeddingModel", log_file="embeddings_training.log", log_to_file=True)
+        self.end_year = self.config.end_year
+        self.logger = LoggerFactory.setup_logger(
+            name="BaseEmbeddingModel",
+            target_year=str(self.end_year),
+            log_to_file=True,
+            log_file=f'logs/{self.end_year}.log'
+        )
     
     def train(self, sentences: List[List[str]]) -> None:
         raise NotImplementedError
@@ -456,7 +469,6 @@ class GloVeModel(BaseEmbeddingModel):
     
     def train(self, sentences: List[List[str]], glove_dir: str = "./glove") -> None:
         """Load GloVe embeddings"""
-        # NOVO: Opção para não usar pré-treinado
         if not self.config.use_pretrained:
             self.logger.warning("GloVe without pretraining is not supported. Using pretrained.")
             self.logger.warning("Consider using Word2Vec or FastText for fair comparison.")
@@ -466,23 +478,16 @@ class GloVeModel(BaseEmbeddingModel):
         self.logger.info(f"Loading GloVe from {w2v_path}...")
         full_model = KeyedVectors.load_word2vec_format(w2v_path, binary=False)
         
-        # NOVO: Filtrar apenas palavras que aparecem no corpus
         corpus_vocab = set(word.lower() for sent in sentences for word in sent)
-        
-        # Criar vocabulário filtrado
         filtered_words = [w for w in full_model.key_to_index.keys() if w in corpus_vocab]
         
         if not filtered_words:
             self.logger.warning("No GloVe words found in corpus! Using full GloVe.")
             self.model = full_model
         else:
-            # Criar modelo apenas com palavras do corpus
             filtered_vectors = np.array([full_model[w] for w in filtered_words])
-            
-            
             self.model = KeyedVectors(vector_size=full_model.vector_size)
             self.model.add_vectors(filtered_words, filtered_vectors)
-            
             self.logger.info(f"GloVe filtered: {len(filtered_words)} words (from {len(full_model)} total)")
         
         self.sentences = [' '.join(sent) for sent in sentences]
@@ -690,9 +695,15 @@ def train_and_evaluate_single(
     config: EmbeddingConfig,
     sentences: List[List[str]],
     evaluator_params: Dict[str, Any],
+    end_year: Optional[int]
 ) -> Tuple[EmbeddingConfig, EvaluationMetrics, float]:
     """Sequential training and evaluation (NO multiprocessing)."""
-    logger = LoggerFactory.setup_logger("ModelTrainer",log_file="embeddings_training.log", log_to_file=True)
+    logger = LoggerFactory.setup_logger(
+        name="ModelTrainer",
+        target_year=str(end_year),
+        log_to_file=True,
+        log_file=f'logs/{end_year}.log'
+    )
     start_time = time.time()
     
     try:
@@ -712,7 +723,7 @@ def train_and_evaluate_single(
         
         total_words = len(set(word for sent in sentences for word in sent))
         
-        evaluator = EmbeddingEvaluator(**evaluator_params)
+        evaluator = EmbeddingEvaluator(**evaluator_params, end_year=end_year)
         metrics = evaluator.evaluate(
             embeddings, vocabulary, total_words, config.model_type, model.model  # NOVO: passar modelo
         )
@@ -748,12 +759,23 @@ class SequentialModelSelector:
         candidate_models: List[ModelType],
         use_pca_variants: bool = True,
         evaluator: Optional[EmbeddingEvaluator] = None,
-        domain_vocabulary: Optional[List[str]] = None,  # NOVO
+        domain_vocabulary: Optional[List[str]] = None,
+        end_year: Optional[int] = None
     ):
         self.candidate_models = candidate_models
         self.use_pca_variants = use_pca_variants
-        self.evaluator = evaluator or EmbeddingEvaluator(domain_vocabulary=domain_vocabulary)
-        self.logger = LoggerFactory.setup_logger("SequentialModelSelector",log_file="embeddings_training.log", log_to_file=True)
+        self.end_year = end_year
+
+        self.evaluator = evaluator or EmbeddingEvaluator(
+            domain_vocabulary=domain_vocabulary, 
+            end_year=self.end_year
+        )
+        self.logger = LoggerFactory.setup_logger(
+            name="SequentialModelSelector",
+            target_year=str(end_year) if end_year else None,
+            log_to_file=True,
+            log_file=f'logs/{end_year}.log' if end_year else 'logs/model_selector.log'
+        )
         self.results = []
     
     def select_best_model(
@@ -771,7 +793,7 @@ class SequentialModelSelector:
             'n_clusters': self.evaluator.n_clusters,
             'k_neighbors': self.evaluator.k_neighbors,
             'test_compounds': self.evaluator.test_compounds,
-            'domain_vocabulary': self.evaluator.domain_vocabulary,  # NOVO
+            'domain_vocabulary': self.evaluator.domain_vocabulary,
             'random_state': self.evaluator.random_state,
         }
         
@@ -782,10 +804,11 @@ class SequentialModelSelector:
                 model_type=model_type, 
                 use_pca=False, 
                 vector_size=vector_size,
-                use_pretrained=(model_type == ModelType.GLOVE)  # NOVO: Flag explícita
+                use_pretrained=(model_type == ModelType.GLOVE),
+                end_year=self.end_year
             )
             config, metrics, train_time = train_and_evaluate_single(
-                config, sentences, evaluator_params
+                config, sentences, evaluator_params, self.end_year
             )
             screening_results.append({
                 'config': config,
@@ -810,10 +833,11 @@ class SequentialModelSelector:
                         use_pca=use_pca,
                         pca_components=50 if use_pca else None,
                         vector_size=vector_size,
-                        use_pretrained=(mt == ModelType.GLOVE)
+                        use_pretrained=(mt == ModelType.GLOVE),
+                        end_year=self.end_year
                     )
                     config, metrics, train_time = train_and_evaluate_single(
-                        config, sentences, evaluator_params
+                        config, sentences, evaluator_params, self.end_year
                     )
                     detailed_results.append({
                         'config': config,
@@ -865,9 +889,11 @@ class SequentialHyperparameterOptimizer:
         timeout: Optional[int] = None,
         study_name: Optional[str] = None,
         storage_path: Optional[str] = None,
+        end_year: Optional[int] = None
     ):
         self.model_config = model_config
-        self.evaluator = evaluator or EmbeddingEvaluator()
+        self.end_year = end_year
+        self.evaluator = evaluator or EmbeddingEvaluator(end_year=self.end_year)
         self.n_trials = n_trials
         self.timeout = timeout
         self.study_name = study_name or f"optim_{model_config.model_type.value}"
@@ -876,7 +902,12 @@ class SequentialHyperparameterOptimizer:
             storage_path = f"./{self.study_name}.db"
         self.storage = f"sqlite:///{storage_path}"
         
-        self.logger = LoggerFactory.setup_logger("SequentialHyperparameterOptimizer",log_file="embeddings_training.log", log_to_file=True)
+        self.logger = LoggerFactory.setup_logger(
+            name="SequentialHyperparameterOptimizer",
+            target_year=str(self.end_year) if self.end_year else None,
+            log_to_file=True,
+            log_file=f'logs/{self.end_year}.log' if self.end_year else 'logs/hyperopt.log'
+        )
         self.study = None
     
     def _get_search_space(self, trial: Trial) -> Dict[str, Any]:
@@ -955,7 +986,8 @@ class SequentialHyperparameterOptimizer:
                 pca_components=params.get('pca_components'),
                 vector_size=params.get('vector_size', self.model_config.vector_size),
                 use_pretrained=self.model_config.use_pretrained,
-                custom_params=params
+                custom_params=params,
+                end_year=self.end_year
             )
             
             model = ModelFactory.create_model(config)
@@ -1040,7 +1072,8 @@ class SequentialEmbeddingAutoML:
         hyperopt_trials: int = 50,
         hyperopt_timeout: Optional[int] = None,
         output_dir: Optional[Path] = None,
-        domain_vocabulary: Optional[List[str]] = None,  # NOVO
+        domain_vocabulary: Optional[List[str]] = None,
+        end_year: Optional[int] = None
     ):
         self.candidate_models = candidate_models or [
             ModelType.WORD2VEC, ModelType.FASTTEXT, ModelType.GLOVE,
@@ -1051,9 +1084,15 @@ class SequentialEmbeddingAutoML:
         self.hyperopt_timeout = hyperopt_timeout
         self.output_dir = output_dir or Path('./automl_results')
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.domain_vocabulary = domain_vocabulary  # NOVO
+        self.domain_vocabulary = domain_vocabulary
+        self.end_year = end_year
         
-        self.logger = LoggerFactory.setup_logger("SequentialEmbeddingAutoML",log_file="embeddings_training.log", log_to_file=True)
+        self.logger = LoggerFactory.setup_logger(
+            name="SequentialEmbeddingAutoML",
+            target_year=str(self.end_year) if self.end_year else None,
+            log_to_file=True,
+            log_file=f'logs/{self.end_year}.log' if self.end_year else 'logs/automl.log'
+        )
         
         self.selected_model_config = None
         self.optimized_params = None
@@ -1078,7 +1117,8 @@ class SequentialEmbeddingAutoML:
             selector = SequentialModelSelector(
                 candidate_models=self.candidate_models,
                 use_pca_variants=self.use_pca_variants,
-                domain_vocabulary=self.domain_vocabulary,  # NOVO
+                domain_vocabulary=self.domain_vocabulary,
+                end_year=self.end_year
             )
             
             self.selected_model_config, _ = selector.select_best_model(sentences)
@@ -1099,11 +1139,15 @@ class SequentialEmbeddingAutoML:
         
         optimizer = SequentialHyperparameterOptimizer(
             model_config=self.selected_model_config,
-            evaluator=EmbeddingEvaluator(domain_vocabulary=self.domain_vocabulary),  # NOVO
+            evaluator=EmbeddingEvaluator(
+                domain_vocabulary=self.domain_vocabulary, 
+                end_year=self.end_year
+            ),
             n_trials=self.hyperopt_trials,
             timeout=self.hyperopt_timeout,
             study_name=f"hyperopt_{self.selected_model_config.model_type.value}",
             storage_path=storage_path,
+            end_year=self.end_year
         )
         
         self.optimized_params, best_score = optimizer.optimize(sentences)
@@ -1120,14 +1164,18 @@ class SequentialEmbeddingAutoML:
             pca_components=self.optimized_params.get('pca_components'),
             vector_size=self.optimized_params.get('vector_size', 300),
             use_pretrained=self.selected_model_config.use_pretrained,
-            custom_params=self.optimized_params
+            custom_params=self.optimized_params,
+            end_year=self.end_year
         )
         
         self.final_model = ModelFactory.create_model(final_config)
         self.final_model.train(sentences)
         
         embeddings = self.final_model.get_embeddings()
-        evaluator = EmbeddingEvaluator(domain_vocabulary=self.domain_vocabulary)
+        evaluator = EmbeddingEvaluator(
+            domain_vocabulary=self.domain_vocabulary, 
+            end_year=self.end_year
+        )
         final_metrics = evaluator.evaluate(
             embeddings, 
             model_type=final_config.model_type,
@@ -1218,9 +1266,9 @@ class SequentialEmbeddingTrainingAutoML:
         
         self.logger = LoggerFactory.setup_logger(
             "SequentialEmbeddingTrainingAutoML",
-            target_year=str(start_year),
+            target_year=str(end_year),
             log_to_file=True,
-            log_file="embeddings_training.log"
+            log_file=f'logs/{self.end_year}.log'
         )
         self._corpus_df = None
         self._domain_vocabulary = None  # NOVO
@@ -1318,7 +1366,8 @@ class SequentialEmbeddingTrainingAutoML:
                 hyperopt_trials=self.automl_config['hyperopt_trials'],
                 hyperopt_timeout=self.automl_config['hyperopt_timeout'],
                 output_dir=self.models_path / f'{self.start_year}_{self.end_year}',
-                domain_vocabulary=domain_vocab,  # NOVO
+                domain_vocabulary=domain_vocab,
+                end_year=self.end_year
             )
             
             initial_config = None
@@ -1327,7 +1376,9 @@ class SequentialEmbeddingTrainingAutoML:
                     model_type=force_model_type, 
                     use_pca=False, 
                     vector_size=300,
-                    use_pretrained=(force_model_type == ModelType.GLOVE)
+                    use_pretrained=(force_model_type == ModelType.GLOVE),
+                    end_year=self.end_year
+                    
                 )
             
             final_model, _, model_type = automl.run(sentences, skip_model_selection, initial_config)

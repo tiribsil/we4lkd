@@ -81,8 +81,8 @@ class Preprocessing:
                  target_year: Optional[int] = None, incremental: bool = True):
         load_dotenv()
 
-        self.logger = LoggerFactory.setup_logger("preprocessing", str(target_year), log_to_file=False)
-
+        self.logger = LoggerFactory.setup_logger("preprocessing", str(target_year), log_to_file=True, log_file=f'logs/{target_year}.log')
+        
         self.disease_name = normalize_disease_name(disease_name)
         self.spacy_model_name = "en_ner_bc5cdr_md"
         self.relevant_spacy_entity_types = relevant_spacy_entity_types or ["CHEMICAL"]
