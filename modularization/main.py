@@ -2,7 +2,7 @@ from utils import *
 from data_collection_module import DataCollection
 from preprocessing_module import Preprocessing
 from embeddings_training_automl import SequentialEmbeddingTrainingAutoML, ModelType
-#from dotproduct_generation_module import ValidationModule
+from dotproduct_generation_module import ValidationModule
 from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 
 
@@ -47,12 +47,6 @@ if __name__ == '__main__':
                     ModelType.WORD2VEC,
                     ModelType.FASTTEXT,
                     ModelType.GLOVE,
-                    ModelType.LSA,
-                    ModelType.BIOBERT,
-                    ModelType.PUBMEDBERT,
-                    ModelType.SCIBERT,
-                    ModelType.SBERT,
-                    ModelType.BIOCLINICALBERT
                 ],
                 'use_pca_variants': True,
                 'model_selection_time_budget': 1800,
@@ -64,7 +58,7 @@ if __name__ == '__main__':
     
         success = embedding_trainer.run_automl()
 
-        """validator = ValidationModule(
+        validator = ValidationModule(
             disease_name=disease,
             start_year=start_year,
             end_year=current_year,
@@ -83,4 +77,4 @@ if __name__ == '__main__':
         
         # Executar pipeline
         success = report_generator.run(generate_latex=True)
- """
+ 

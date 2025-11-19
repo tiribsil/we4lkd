@@ -23,13 +23,6 @@ import json
 import gc
 
 from utils import LoggerFactory, normalize_disease_name
-
-# Transformer models
-try:
-    from sentence_transformers import SentenceTransformer
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
     
 
 class ModelType(Enum):
@@ -37,12 +30,6 @@ class ModelType(Enum):
     WORD2VEC = "word2vec"
     FASTTEXT = "fasttext"
     GLOVE = "glove"
-    LSA = "lsa"
-    BIOBERT = "biobert"
-    PUBMEDBERT = "pubmedbert"
-    SCIBERT = "scibert"
-    SBERT = "sbert"
-    BIOCLINICALBERT = "bioclinicalbert"
 
 
 @dataclass
@@ -198,12 +185,7 @@ class EmbeddingEvaluator:
         found = 0
         for word in test_words:
             try:
-                if model_type in [ModelType.BIOBERT, ModelType.PUBMEDBERT, 
-                                ModelType.SCIBERT, ModelType.SBERT, 
-                                ModelType.BIOCLINICALBERT]:
-                    # Transformers sempre conseguem embeddings
-                    found += 1
-                elif model_type == ModelType.FASTTEXT:
+                if model_type == ModelType.FASTTEXT:
                     # FastText usa subword
                     _ = model.wv[word]
                     found += 1
@@ -213,10 +195,6 @@ class EmbeddingEvaluator:
                         found += 1
                 elif model_type == ModelType.WORD2VEC:
                     if word in model.wv:
-                        found += 1
-                elif model_type == ModelType.LSA:
-                    # LSA usa vectorizer
-                    if hasattr(model, 'vocabulary') and word in model.vocabulary:
                         found += 1
             except:
                 continue
@@ -514,159 +492,6 @@ class GloVeModel(BaseEmbeddingModel):
         return self.apply_pca(embeddings)
 
 
-class LSAModel(BaseEmbeddingModel):
-    """LSA embedding model."""
-    
-    def __init__(self, config: EmbeddingConfig):
-        super().__init__(config)
-        self.vectorizer = None
-        self.svd = None
-        self.vocabulary = {}
-    
-    def train(self, sentences: List[List[str]]) -> None:
-        documents = [' '.join(sentence) for sentence in sentences]
-        
-        use_tfidf = self.config.custom_params.get('use_tfidf', True)
-        VectorizerClass = TfidfVectorizer if use_tfidf else CountVectorizer
-        
-        self.vectorizer = VectorizerClass(
-            max_features=self.config.custom_params.get('max_features', None),
-            min_df=self.config.custom_params.get('min_df', 2),
-            max_df=self.config.custom_params.get('max_df', 0.95),
-            ngram_range=self.config.custom_params.get('ngram_range', (1, 1)),
-            lowercase=True
-        )
-        
-        self.logger.info(f"Vectorizing {len(documents)} documents...")
-        doc_term_matrix = self.vectorizer.fit_transform(documents)
-        self.vocabulary = self.vectorizer.vocabulary_
-        
-        self.svd = TruncatedSVD(
-            n_components=self.config.vector_size,
-            random_state=42,
-            n_iter=self.config.custom_params.get('n_iter', 10)
-        )
-        
-        document_embeddings = self.svd.fit_transform(doc_term_matrix)
-        term_embeddings = self.svd.components_.T
-        
-        self.model = {
-            'term_embeddings': term_embeddings,
-            'document_embeddings': document_embeddings,
-            'vocabulary': self.vocabulary,
-            'vectorizer': self.vectorizer,
-            'svd': self.svd
-        }
-        
-        explained_var = self.svd.explained_variance_ratio_.sum()
-        self.logger.info(f"LSA: {len(self.vocabulary)} terms, var={explained_var:.2%}")
-    
-    def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
-        if sentences:
-            doc_term_matrix = self.vectorizer.transform(sentences)
-            embeddings = self.svd.transform(doc_term_matrix)
-        else:
-            embeddings = self.model['document_embeddings']
-        
-        return self.apply_pca(embeddings)
-
-
-class TransformerModel(BaseEmbeddingModel):
-    """Transformer-based embedding models usando transformers diretamente."""
-    
-    MODEL_NAMES = {
-        ModelType.BIOBERT: "dmis-lab/biobert-v1.1",
-        ModelType.PUBMEDBERT: "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
-        ModelType.SCIBERT: "allenai/scibert_scivocab_uncased",
-        ModelType.SBERT: "sentence-transformers/all-MiniLM-L6-v2",
-        ModelType.BIOCLINICALBERT: "emilyalsentzer/Bio_ClinicalBERT",
-    }
-    
-    def train(self, sentences: List[List[str]]) -> None:
-        model_name = self.MODEL_NAMES.get(self.config.model_type)
-        if not model_name:
-            raise ValueError(f"Unknown model: {self.config.model_type}")
-        
-        self.logger.info(f"Loading {model_name}...")
-        
-        # Tentar sentence-transformers primeiro (para SBERT)
-        if self.config.model_type == ModelType.SBERT:
-            if not TRANSFORMERS_AVAILABLE:
-                raise ImportError("sentence-transformers required for SBERT")
-            self.model = SentenceTransformer(model_name)
-            self.use_sentence_transformer = True
-        else:
-            # Usar transformers para outros modelos
-            try:
-                from transformers import AutoTokenizer, AutoModel
-                import torch
-                
-                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                self.model = AutoModel.from_pretrained(model_name)
-                self.use_sentence_transformer = False
-                
-                # Mover para GPU se disponível
-                self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                self.model.to(self.device)
-                self.model.eval()
-                
-                self.logger.info(f"Model loaded on {self.device}")
-            except ImportError:
-                raise ImportError("transformers library required. Install: pip install transformers torch")
-        
-        self.sentences = [' '.join(sent) for sent in sentences]
-    
-    def _mean_pooling(self, model_output, attention_mask):
-        """Mean pooling para obter sentence embeddings."""
-        import torch
-        
-        token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
-        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-    
-    def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
-        texts = sentences if sentences else self.sentences
-        
-        if self.use_sentence_transformer:
-            # Usar sentence-transformers normalmente
-            embeddings = self.model.encode(texts, show_progress_bar=True, batch_size=32)
-        else:
-            # Usar transformers manualmente
-            import torch
-            from tqdm import tqdm
-            
-            embeddings = []
-            batch_size = 32
-            
-            with torch.no_grad():
-                for i in tqdm(range(0, len(texts), batch_size), desc="Encoding"):
-                    batch_texts = texts[i:i+batch_size]
-                    
-                    # Tokenizar
-                    encoded = self.tokenizer(
-                        batch_texts,
-                        padding=True,
-                        truncation=True,
-                        max_length=512,
-                        return_tensors='pt'
-                    )
-                    
-                    # Mover para device
-                    encoded = {k: v.to(self.device) for k, v in encoded.items()}
-                    
-                    # Forward pass
-                    output = self.model(**encoded)
-                    
-                    # Mean pooling
-                    batch_embeddings = self._mean_pooling(output, encoded['attention_mask'])
-                    
-                    embeddings.append(batch_embeddings.cpu().numpy())
-            
-            embeddings = np.vstack(embeddings)
-        
-        return self.apply_pca(embeddings)
-
-
 class ModelFactory:
     """Factory for creating embedding models."""
     
@@ -676,12 +501,6 @@ class ModelFactory:
             ModelType.WORD2VEC: Word2VecModel,
             ModelType.FASTTEXT: FastTextModel,
             ModelType.GLOVE: GloVeModel,
-            ModelType.LSA: LSAModel,
-            ModelType.BIOBERT: TransformerModel,
-            ModelType.PUBMEDBERT: TransformerModel,
-            ModelType.SCIBERT: TransformerModel,
-            ModelType.SBERT: TransformerModel,
-            ModelType.BIOCLINICALBERT: TransformerModel,
         }
         
         model_class = model_map.get(config.model_type)
@@ -955,21 +774,6 @@ class SequentialHyperparameterOptimizer:
                 'n_iter': trial.suggest_int('n_iter', 5, 15),
             })
         
-        elif self.model_config.model_type in [
-            ModelType.BIOBERT, ModelType.PUBMEDBERT, ModelType.SCIBERT, 
-            ModelType.SBERT, ModelType.BIOCLINICALBERT
-        ]:
-            params.update({
-                'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64]),
-                'max_length': trial.suggest_categorical('max_length', [128, 256, 512]),
-                'learning_rate': trial.suggest_float('learning_rate', 1e-6, 5e-5, log=True),
-                'num_epochs': trial.suggest_int('num_epochs', 2, 5),
-                'weight_decay': trial.suggest_float('weight_decay', 0.0, 0.3),
-                'warmup_ratio': trial.suggest_float('warmup_ratio', 0.0, 0.3),
-                'dropout': trial.suggest_float('dropout', 0.1, 0.5),
-                'pooling_strategy': trial.suggest_categorical('pooling_strategy', ['cls', 'mean', 'max']),
-            })
-        
         if self.model_config.use_pca:
             params['pca_components'] = trial.suggest_int('pca_components', 30, 200)
         
@@ -1076,9 +880,7 @@ class SequentialEmbeddingAutoML:
         end_year: Optional[int] = None
     ):
         self.candidate_models = candidate_models or [
-            ModelType.WORD2VEC, ModelType.FASTTEXT, ModelType.GLOVE,
-            ModelType.LSA, ModelType.BIOBERT, ModelType.PUBMEDBERT
-        ]
+            ModelType.WORD2VEC, ModelType.FASTTEXT, ModelType.GLOVE]
         self.use_pca_variants = use_pca_variants
         self.hyperopt_trials = hyperopt_trials
         self.hyperopt_timeout = hyperopt_timeout
@@ -1255,9 +1057,7 @@ class SequentialEmbeddingTrainingAutoML:
         
         default_config = {
             'candidate_models': [
-                ModelType.WORD2VEC, ModelType.FASTTEXT, ModelType.GLOVE,
-                ModelType.LSA,
-            ],
+                ModelType.WORD2VEC, ModelType.FASTTEXT, ModelType.GLOVE],
             'use_pca_variants': True,
             'hyperopt_trials': 30,
             'hyperopt_timeout': 1800,
@@ -1415,9 +1215,7 @@ if __name__ == '__main__':
             'candidate_models': [
                 ModelType.WORD2VEC,
                 ModelType.FASTTEXT,
-                ModelType.GLOVE,
-                ModelType.LSA,
-            ],
+                ModelType.GLOVE],
             'use_pca_variants': True,
             'hyperopt_trials': 20,
             'hyperopt_timeout': 900,

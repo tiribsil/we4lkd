@@ -14,7 +14,7 @@ from functools import lru_cache
 from utils import *
 import warnings
 import pickle
-import torch
+
 
 def _get_chembl_client():
     """Lazy import of ChEMBL client to avoid import-time errors."""
@@ -31,19 +31,13 @@ class ModelType(Enum):
     WORD2VEC = "word2vec"
     FASTTEXT = "fasttext"
     GLOVE = "glove"
-    LSA = "lsa"
-    BIOBERT = "biobert"
-    PUBMEDBERT = "pubmedbert"
-    SCIBERT = "scibert"
-    SBERT = "sbert"
-    BIOCLINICALBERT = "bioclinicalbert"
 
 
 class ValidationModule:
     """
     Module for validating embedding models by computing similarities
     between therapeutic compounds and disease embeddings over time.
-    Supports multiple model types including word embeddings and transformers.
+    Supports Word2Vec, FastText and GloVe models.
     """
     
     # Blacklist padrão de biomoléculas genéricas
@@ -58,23 +52,6 @@ class ValidationModule:
         'methylcellulose(4000cps)', 'insulin', 'triphosphate', 
         'histaminedihydrochloride', 'water', 'carbon'
     })
-    
-    # Tipos de modelos que são word embeddings tradicionais
-    WORD_EMBEDDING_TYPES = {
-        ModelType.WORD2VEC.value,
-        ModelType.FASTTEXT.value,
-        ModelType.GLOVE.value,
-        ModelType.LSA.value
-    }
-    
-    # Tipos de modelos que são transformers
-    TRANSFORMER_TYPES = {
-        ModelType.BIOBERT.value,
-        ModelType.PUBMEDBERT.value,
-        ModelType.SCIBERT.value,
-        ModelType.SBERT.value,
-        ModelType.BIOCLINICALBERT.value
-    }
     
     def __init__(
         self,
@@ -128,12 +105,8 @@ class ValidationModule:
         self._model_types_by_year = {}  # Armazena tipo de modelo por ano
         self._chembl_client = None
         
-        # Device para transformers
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
         self.logger.info(f"ValidationModule initialized for {self.disease_name}")
         self.logger.info(f"Years: {start_year}-{end_year}")
-        self.logger.info(f"Device: {self.device}")
         self.logger.info(f"ChEMBL enabled: {use_chembl}")
         self._detect_available_models()
 
@@ -375,30 +348,13 @@ class ValidationModule:
             elif model_type == ModelType.GLOVE.value:
                 model = KeyedVectors.load(str(model_path))
                 
-            elif model_type == ModelType.LSA.value:
-                # LSA geralmente é salvo como pickle com modelo + vocabulário
-                with open(model_path, 'rb') as f:
-                    model = pickle.load(f)
-                
-            elif model_type in self.TRANSFORMER_TYPES:
-                # Transformers: carregar modelo e tokenizer
-                with open(model_path, 'rb') as f:
-                    model_data = pickle.load(f)
-                
-                # Estrutura esperada: {'model': ..., 'tokenizer': ..., 'embeddings': ...}
-                model = model_data
-                
-                # Mover modelo para device se disponível
-                if 'model' in model_data and hasattr(model_data['model'], 'to'):
-                    model_data['model'].to(self.device)
-            
             else:
                 self.logger.error(f"Unsupported model type: {model_type}")
                 return None
             
-            # Cachear (limitar tamanho do cache)
+            # Cachear
             result = (model, model_type)
-            if len(self._models_cache) < 3:  # Reduzido para transformers pesados
+            if len(self._models_cache) < 5:
                 self._models_cache[year] = result
             
             return result
@@ -427,25 +383,6 @@ class ValidationModule:
             Array numpy com embedding ou None
         """
         method = method or self.embedding_method
-        
-        # Word embeddings tradicionais
-        if model_type in self.WORD_EMBEDDING_TYPES:
-            return self._get_word_embedding(word, model, model_type, method)
-        
-        # Transformers
-        elif model_type in self.TRANSFORMER_TYPES:
-            return self._get_transformer_embedding(word, model, method)
-        
-        return None
-
-    def _get_word_embedding(
-        self,
-        word: str,
-        model: object,
-        model_type: str,
-        method: str
-    ) -> Optional[np.ndarray]:
-        """Obtém embedding de modelos word embedding tradicionais."""
         
         # --- Função auxiliar: detectar se o vocabulário usa underscores ---
         def _uses_underscore_vocab(vocab_keys: List[str]) -> bool:
@@ -484,141 +421,52 @@ class ValidationModule:
             
             return unique_variants
         
-        # --- LSA (modelo customizado com dicionário) ---
-        if model_type == ModelType.LSA.value:
-            vocab = model.get('vocab', {})
-            embeddings_matrix = model.get('embeddings')
-            
-            # Tentar variantes
-            vocab_uses_underscore = any('_' in w for w in list(vocab.keys())[:100])
-            variants = _generate_word_variants(word, vocab_uses_underscore)
-            
-            if method == 'da':
-                for variant in variants:
-                    if variant in vocab:
-                        self.logger.debug(f"Found '{word}' as '{variant}' in LSA vocab")
-                        return embeddings_matrix[vocab[variant]]
-                
-                # Log para debug
-                self.logger.warning(f"Word '{word}' not found. Tried variants: {variants}")
-                return None
-            
-            elif method == 'avg':
-                matching_indices = []
-                for variant in variants:
-                    matching_indices.extend([
-                        idx for w, idx in vocab.items() if variant in w
-                    ])
-                
-                if not matching_indices:
-                    return None
-                return np.mean(embeddings_matrix[matching_indices], axis=0)
+        # Obter vocabulário
+        vocab = model.wv if hasattr(model, 'wv') else model
         
-        # --- Word2Vec, FastText, GloVe ---
+        # Get vocabulary keys properly for KeyedVectors
+        if hasattr(vocab, 'index_to_key'):
+            vocab_keys = vocab.index_to_key
+        elif hasattr(vocab, 'key_to_index'):
+            vocab_keys = list(vocab.key_to_index.keys())
         else:
-            vocab = model.wv if hasattr(model, 'wv') else model
+            # Fallback for older gensim versions
+            vocab_keys = list(vocab.vocab.keys()) if hasattr(vocab, 'vocab') else []
+
+        # Detecta automaticamente se o modelo usa underscores
+        uses_underscore = _uses_underscore_vocab(vocab_keys)
+
+        # Gera variantes possíveis do termo
+        variants = _generate_word_variants(word, uses_underscore)
+
+        # --- Método de acesso direto ---
+        if method == 'da':
+            for variant in variants:
+                if variant in vocab.key_to_index:
+                    self.logger.debug(f"Found '{word}' as '{variant}' in vocab")
+                    return vocab[variant]
             
-            # Get vocabulary keys properly for KeyedVectors
-            if hasattr(vocab, 'index_to_key'):
-                vocab_keys = vocab.index_to_key
-            elif hasattr(vocab, 'key_to_index'):
-                vocab_keys = list(vocab.key_to_index.keys())
-            else:
-                # Fallback for older gensim versions
-                vocab_keys = list(vocab.vocab.keys()) if hasattr(vocab, 'vocab') else []
+            for variant in variants:
+                # Procura tokens que contenham a variante
+                partial_matches = [k for k in vocab_keys if variant.lower() in k.lower()]
+                if partial_matches:
+                    best_match = partial_matches[0]
+                    return vocab[best_match]
+            
+            return None
 
-            # Detecta automaticamente se o modelo usa underscores
-            uses_underscore = _uses_underscore_vocab(vocab_keys)
-
-            # Gera variantes possíveis do termo
-            variants = _generate_word_variants(word, uses_underscore)
-
-            # --- Método de acesso direto ---
-            if method == 'da':
-                for variant in variants:
-                    if variant in vocab.key_to_index:
-                        self.logger.debug(f"Found '{word}' as '{variant}' in vocab")
-                        return vocab[variant]
-                
-                for variant in variants:
-                    # Procura tokens que contenham a variante
-                    partial_matches = [k for k in vocab_keys if variant.lower() in k.lower()]
-                    if partial_matches:
-                        best_match = partial_matches[0]
-                        return vocab[best_match]
-                
+        # --- Método de média dos termos contendo a palavra ---
+        elif method == 'avg':
+            matching_tokens = []
+            for variant in variants:
+                matching_tokens.extend(
+                    [key for key in vocab_keys if variant in key]
+                )
+            if not matching_tokens:
                 return None
 
-            # --- Método de média dos termos contendo a palavra ---
-            elif method == 'avg':
-                matching_tokens = []
-                for variant in variants:
-                    matching_tokens.extend(
-                        [key for key in vocab_keys if variant in key]
-                    )
-                if not matching_tokens:
-                    return None
-
-                embeddings = vocab[matching_tokens]
-                return np.mean(embeddings, axis=0)
-        
-        return None
-
-    def _get_transformer_embedding(
-        self,
-        word: str,
-        model_data: Dict,
-        method: str
-    ) -> Optional[np.ndarray]:
-        """
-        Obtém embedding de modelos transformer.
-        
-        Args:
-            word: Palavra para buscar embedding
-            model_data: Dict contendo model, tokenizer e/ou embeddings pré-computados
-            method: Método de extração
-        """
-        # Se embeddings já estão pré-computados (recomendado)
-        if 'embeddings' in model_data and isinstance(model_data['embeddings'], dict):
-            vocab = model_data['embeddings']
-            
-            if method == 'da':
-                return vocab.get(word)
-            
-            elif method == 'avg':
-                matching_embeddings = [
-                    emb for w, emb in vocab.items() if word in w
-                ]
-                if not matching_embeddings:
-                    return None
-                return np.mean(matching_embeddings, axis=0)
-        
-        # Se precisar computar on-the-fly (mais lento)
-        elif 'model' in model_data and 'tokenizer' in model_data:
-            try:
-                tokenizer = model_data['tokenizer']
-                model = model_data['model']
-                
-                # Tokenizar
-                inputs = tokenizer(
-                    word,
-                    return_tensors='pt',
-                    padding=True,
-                    truncation=True,
-                    max_length=512
-                ).to(self.device)
-                
-                # Obter embeddings
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    # Mean pooling dos tokens
-                    embeddings = outputs.last_hidden_state.mean(dim=1)
-                
-                return embeddings.cpu().numpy()[0]
-                
-            except Exception as e:
-                self.logger.warning(f"Error computing transformer embedding: {e}")
-                return None
+            embeddings = vocab[matching_tokens]
+            return np.mean(embeddings, axis=0)
         
         return None
 
@@ -638,13 +486,7 @@ class ValidationModule:
             model, model_type = result
             
             # Obter vocabulário uma vez
-            if model_type in self.WORD_EMBEDDING_TYPES:
-                vocab_set = self._get_vocab_set(model, model_type)
-            elif model_type in self.TRANSFORMER_TYPES:
-                vocab_set = self._get_transformer_vocab_set(model)
-            else:
-                self.logger.warning(f"Unknown model type: {model_type}")
-                return list(compounds)
+            vocab_set = self._get_vocab_set(model, model_type)
             
             if not vocab_set:
                 self.logger.warning("Empty vocabulary")
@@ -692,34 +534,15 @@ class ValidationModule:
         Returns:
             Set com todas as palavras do vocabulário
         """
-        if model_type == ModelType.LSA.value:
-            vocab = model.get('vocab', {})
-            return set(vocab.keys())
+        vocab = model.wv if hasattr(model, 'wv') else model
         
-        else:  # Word2Vec, FastText, GloVe
-            vocab = model.wv if hasattr(model, 'wv') else model
-            
-            if hasattr(vocab, 'index_to_key'):
-                return set(vocab.index_to_key)
-            elif hasattr(vocab, 'key_to_index'):
-                return set(vocab.key_to_index.keys())
-            elif hasattr(vocab, 'vocab'):
-                return set(vocab.vocab.keys())
-            
-            return set()
-
-    def _get_transformer_vocab_set(self, model_data: Dict) -> Set[str]:
-        """
-        Extrai vocabulário de modelos transformer.
+        if hasattr(vocab, 'index_to_key'):
+            return set(vocab.index_to_key)
+        elif hasattr(vocab, 'key_to_index'):
+            return set(vocab.key_to_index.keys())
+        elif hasattr(vocab, 'vocab'):
+            return set(vocab.vocab.keys())
         
-        Args:
-            model_data: Dict contendo embeddings pré-computados
-        
-        Returns:
-            Set com vocabulário
-        """
-        if 'embeddings' in model_data and isinstance(model_data['embeddings'], dict):
-            return set(model_data['embeddings'].keys())
         return set()
 
     def _generate_compound_variants(self, compound: str, vocab_sample: Set[str]) -> List[str]:
@@ -1051,21 +874,19 @@ class ValidationModule:
             return
         
         model, model_type = result
+        vocab = model.wv if hasattr(model, 'wv') else model
         
-        if model_type in self.WORD_EMBEDDING_TYPES:
-            vocab = model.wv if hasattr(model, 'wv') else model
-            
-            if hasattr(vocab, 'index_to_key'):
-                vocab_keys = vocab.index_to_key
-            elif hasattr(vocab, 'key_to_index'):
-                vocab_keys = list(vocab.key_to_index.keys())
-            else:
-                vocab_keys = []
-            
-            if search_term:
-                search_lower = search_term.lower()
-                matches = [w for w in vocab_keys if search_lower in w.lower()]
-                self.logger.info(f"Words containing '{search_term}': {matches[:20]}")
+        if hasattr(vocab, 'index_to_key'):
+            vocab_keys = vocab.index_to_key
+        elif hasattr(vocab, 'key_to_index'):
+            vocab_keys = list(vocab.key_to_index.keys())
+        else:
+            vocab_keys = []
+        
+        if search_term:
+            search_lower = search_term.lower()
+            matches = [w for w in vocab_keys if search_lower in w.lower()]
+            self.logger.info(f"Words containing '{search_term}': {matches[:20]}")
 
 
 if __name__ == '__main__':
@@ -1074,11 +895,6 @@ if __name__ == '__main__':
         start_year=1990,
         end_year=1990
     )
-
-    validator.debug_vocabulary(1990, search_term="acute myeloid leukemia")
-    validator.debug_vocabulary(1990, search_term="leukemia")
-    validator.debug_vocabulary(1990, search_term="acute")
-    validator.debug_vocabulary(1990, search_term="myeloid")
     
     success = validator.run()
     
