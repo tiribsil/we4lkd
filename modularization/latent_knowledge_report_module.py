@@ -658,12 +658,14 @@ class LatentKnowledgeReportGenerator:
         
         return stats
 
-    def run(self, generate_latex: bool = False) -> bool:
+    def run(self, generate_latex: bool = False, max_new_topics: int = 8, max_topics: int = 8) -> bool:
         """
         Executa pipeline completo de geração de relatórios.
 
         Args:
             generate_latex: Se True, gera relatório LaTeX
+            max_new_topics: Máximo de novos tópicos a adicionar
+            max_topics: Limite total de tópicos
 
         Returns:
             True se sucesso, False caso contrário
@@ -682,7 +684,7 @@ class LatentKnowledgeReportGenerator:
             if top_txt_file:
                 self.logger.info(f"Potential treatments saved to {top_txt_file}")
                 self.logger.info("Running feedback loop to update topics_of_interest.txt...")
-                self.feedback_new_topics()
+                self.feedback_new_topics(max_new_topics=max_new_topics, max_topics=max_topics)
             else:
                 self.logger.warning("Could not generate potential_treatments.txt")
 

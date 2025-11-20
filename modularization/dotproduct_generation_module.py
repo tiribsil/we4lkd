@@ -131,7 +131,7 @@ class ValidationModule:
         # Mapear nomes de arquivo para ModelType
         valid_model_names = {mt.value for mt in ModelType}
         
-        for model_file in self.model_directory.glob('*.model'):
+        for model_file in self.model_directory.glob('**/*.model'):
             match = pattern.match(model_file.name)
             if match:
                 model_type = match.group(1).lower()
