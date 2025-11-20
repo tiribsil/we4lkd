@@ -577,8 +577,7 @@ class Preprocessing:
             years_to_process = self._get_years_to_process()
         
         if not years_to_process:
-            self.logger.info("No new years to process. Using full processing mode.")
-            return self.clean_and_normalize()
+            return
         
         self.logger.info(f"Processing years: {years_to_process}")
         

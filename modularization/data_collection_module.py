@@ -44,6 +44,65 @@ class DataCollection:
         
         self.paper_counter = 0
 
+    def get_first_publication_year(self) -> int | None:
+        """
+        Finds the earliest publication year using a binary search algorithm for each topic.
+        This is efficient and robust against PubMed API limitations like sort order and retstart.
+        """
+        self.logger.info("Determining the first publication year from topics of interest using binary search...")
+        topics = self.list_from_file(self.topics_file)
+        if not topics:
+            self.logger.warning("Topics of interest file is empty. Cannot determine start year.")
+            return None
+
+        oldest_year_overall = None
+        
+        for topic in topics:
+            self.logger.info(f"Binary searching for earliest publication for topic: '{topic}'")
+            
+            low = 1500  # A safe lower bound for PubMed/MEDLINE articles
+            high = datetime.now().year
+            earliest_year_for_topic = None
+
+            while low <= high:
+                mid_year = (low + high) // 2
+                try:
+                    # Query for articles published up to and including mid_year
+                    query = f'(("{topic}"[Title/Abstract] OR "{topic}"[MeSH Terms])) AND ("1500":"{mid_year}"[DP]) AND (English[Language])'
+                    
+                    handle = Entrez.esearch(db='pubmed', term=query, retmax=0)
+                    record = Entrez.read(handle)
+                    handle.close()
+                    count = int(record.get('Count', 0))
+
+                    self.logger.debug(f"Topic '{topic}', Year Range <= {mid_year}: Found {count} articles.")
+
+                    if count > 0:
+                        # An article exists at or before this year. This is a potential answer.
+                        # Try to find an even earlier one.
+                        earliest_year_for_topic = mid_year
+                        high = mid_year - 1
+                    else:
+                        # No articles found up to this year, so the first must be later.
+                        low = mid_year + 1
+                    
+                    time.sleep(0.35)
+
+                except Exception as e:
+                    self.logger.error(f"API error during binary search for topic '{topic}' at year {mid_year}: {e}")
+                    # In case of error, break this search to avoid hammering the API
+                    break
+            
+            if earliest_year_for_topic:
+                self.logger.info(f"Earliest year found for topic '{topic}': {earliest_year_for_topic}")
+                if oldest_year_overall is None or earliest_year_for_topic < oldest_year_overall:
+                    oldest_year_overall = earliest_year_for_topic
+                    self.logger.info(f"Updated overall oldest year to {oldest_year_overall}.")
+            else:
+                 self.logger.warning(f"Could not find any articles for topic '{topic}'.")
+
+        return oldest_year_overall
+
     def normalize_disease_name(self, disease_name: str) -> str:
         return disease_name.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
 

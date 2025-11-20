@@ -11,10 +11,9 @@ from utils import LoggerFactory, normalize_disease_name
 
 
 class IterativeTopicExpansion:
-    def __init__(self, disease_name: str, start_year: int, max_topics: int, max_new_topics: int):
+    def __init__(self, disease_name: str, max_topics: int, max_new_topics: int):
         self.disease_name = disease_name
         self.normalized_disease_name = normalize_disease_name(disease_name)
-        self.start_year = start_year
         self.max_topics = max_topics
         self.max_new_topics = max_new_topics
         self.logger = LoggerFactory.setup_logger("IterativeTopicExpansion", log_to_file=True, log_file='iterative_topic_expansion.log')
@@ -31,11 +30,32 @@ class IterativeTopicExpansion:
 
     def run(self):
         self.logger.info("Starting iterative topic expansion process.")
+
+        # Ensure topics_of_interest.txt is initialized with disease name if empty
+        if not self.topics_file.exists() or self._get_current_topics_count() == 0:
+            self.topics_file.parent.mkdir(parents=True, exist_ok=True)
+            self.topics_file.write_text(self.disease_name + '\n', encoding='utf-8')
+            self.logger.info(f"Initialized topics_of_interest.txt with '{self.disease_name}'.")
+
+        self.logger.info("Determining start year based on topics...")
+        # We need a temporary DC instance just to get the start year
+        temp_dc_for_year_finding = DataCollection(self.disease_name, target_year=2000) # Year is irrelevant here
+        start_year = temp_dc_for_year_finding.get_first_publication_year()
+
+        if start_year is None:
+            start_year = 1970 # Default fallback year
+            self.logger.warning(f"Could not determine start year dynamically. Defaulting to {start_year}.")
+        else:
+            self.logger.info(f"Dynamically determined start year: {start_year}")
+
+
+        self.logger.info("Starting iterative topic expansion process.")
+        self.logger.info(f"Start year: {start_year}")
         self.logger.info(f"Max topics to reach: {self.max_topics}")
         self.logger.info(f"Max new topics per iteration: {self.max_new_topics}")
 
         iteration = 1
-        current_year = self.start_year
+        current_year = start_year
         while self._get_current_topics_count() < self.max_topics:
             self.logger.info(f"{'='*20} Iteration: {iteration} | Year: {current_year} {'='*20}")
             current_topics = self._get_current_topics_count()
@@ -61,6 +81,7 @@ class IterativeTopicExpansion:
             )
             if not preprocessing.run(force_full=False):
                 self.logger.error("Preprocessing failed. Skipping.")
+                iteration += 1
                 current_year += 1
                 continue
             self.logger.info("Preprocessing complete.")
@@ -69,20 +90,22 @@ class IterativeTopicExpansion:
             self.logger.info("Running Fixed Embedding Training module...")
             embedding_trainer = FixedEmbeddingTraining(
                 disease_name=self.disease_name,
-                start_year=self.start_year,
+                start_year=start_year,
                 end_year=current_year,
                 model_type='word2vec'
             )
             if not embedding_trainer.run():
-                self.logger.error("Embedding training failed. Stopping.")
-                break
+                self.logger.error("Embedding training failed. Skipping.")
+                iteration += 1
+                current_year += 1
+                continue
             self.logger.info("Embedding training complete.")
 
             # 4. Dot Product Generation (Cumulative)
             self.logger.info("Running Dot Product Generation module...")
             validator = ValidationModule(
                 disease_name=self.disease_name,
-                start_year=self.start_year,
+                start_year=start_year,
                 end_year=current_year,
                 use_chembl=True
             )
@@ -95,7 +118,7 @@ class IterativeTopicExpansion:
                 disease_name=self.disease_name,
                 model_type='word2vec',
                 top_n_compounds=20, # This can be a parameter
-                delta_threshold=0.001,
+                delta_threshold=0,
                 target_year=current_year
             )
             report_generator.run(
@@ -104,28 +127,17 @@ class IterativeTopicExpansion:
                 max_topics=self.max_topics
             )
 
-            new_topics_count = self._get_current_topics_count()
-            if new_topics_count == current_topics:
-                self.logger.warning("No new topics were added in this iteration. Stopping to avoid infinite loop.")
-                break
-
             self.logger.info("Latent Knowledge Report and feedback complete.")
             iteration += 1
             current_year += 1
             time.sleep(1) # Small delay between iterations
 
-        self.logger.info("Iterative topic expansion process finished.")
-        final_topic_count = self._get_current_topics_count()
-        if final_topic_count >= self.max_topics:
-            self.logger.info(f"Target number of topics ({self.max_topics}) reached.")
-        else:
-            self.logger.info(f"Process stopped at {final_topic_count} topics.")
 
-
-if __name__ == '__main__':    
+if __name__ == '__main__':
+    # Example usage
     expander = IterativeTopicExpansion(
-            disease_name='acute myeloid leukemia',
-            start_year=1970,
-            max_topics=8,
-            max_new_topics=8)
+        disease_name='acute myeloid leukemia',
+        max_topics=9,
+        max_new_topics=9
+    )
     expander.run()
