@@ -10,7 +10,7 @@ class FixedEmbeddingTraining:
         self.normalized_disease_name = normalize_disease_name(disease_name)
         self.start_year = start_year
         self.end_year = end_year
-        self.model_type = model_type
+        self.model_type = 'w2v_fixed'
         self.logger = LoggerFactory.setup_logger("FixedEmbeddingTraining", f"{start_year}-{end_year}", log_to_file=True, log_file=f'logs/{end_year}.log')
 
         self.base_path = Path('./data') / self.normalized_disease_name
@@ -26,7 +26,6 @@ class FixedEmbeddingTraining:
         """
         self.logger.info(f"Starting fixed Word2Vec training for disease '{self.disease_name}' for years {self.start_year}-{self.end_year}.")
 
-        # Hardcoded parameters from "modelo do Matheus" (src/train_yoy.py)
         vector_size = 200
         alpha = 0.025
         negative = 15

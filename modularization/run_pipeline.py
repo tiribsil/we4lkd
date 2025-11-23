@@ -6,9 +6,9 @@ from data_collection_module import DataCollection
 from preprocessing_module import Preprocessing
 from embeddings_training_automl import SequentialEmbeddingTrainingAutoML, ModelType
 from dotproduct_generation_module import ValidationModule
-# from selection_module import ModelSelector # To be created
+from selection_module import ModelSelector
 from latent_knowledge_report_module import LatentKnowledgeReportGenerator
-from utils import LoggerFactory
+from utils import LoggerFactory, _load_checkpoint, _save_checkpoint, normalize_disease_name
 
 def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, train_val_test_split: list[float]):
     if len(train_val_test_split) != 3:
@@ -17,6 +17,14 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
     logger = LoggerFactory.setup_logger("MainPipeline", log_to_file=True, log_file='main_pipeline.log')
     logger.info(f"Starting full pipeline for disease: {disease_name}")
 
+    normalized_disease_name = normalize_disease_name(disease_name)
+    checkpoint_data = _load_checkpoint(normalized_disease_name)
+    
+    last_expansion_year = checkpoint_data.get("last_expansion_year")
+    model_dev_end_year = checkpoint_data.get("model_dev_end_year")
+    model_selection_end_year = checkpoint_data.get("model_selection_end_year")
+    best_model = checkpoint_data.get("best_model_name")
+
     # ===================================================================================
     # PHASE 1: Iterative Topic Expansion
     # ===================================================================================
@@ -24,13 +32,21 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
     logger.info("PHASE 1: Iterative Topic Expansion")
     logger.info("="*80)
 
-    topic_expander = IterativeTopicExpansion(
-        disease_name=disease_name,
-        max_topics=max_topics,
-        max_new_topics=max_new_topics
-    )
-    last_expansion_year = topic_expander.run()
-    logger.info(f"Topic expansion phase concluded. The last processed year was {last_expansion_year}.")
+    # Checkpoint 1: Topic Expansion
+    if not checkpoint_data["phase_1_topic_expansion_completed"]:
+        topic_expander = IterativeTopicExpansion(
+            disease_name=disease_name,
+            max_topics=max_topics,
+            max_new_topics=max_new_topics
+        )
+        last_expansion_year = topic_expander.run()
+        logger.info(f"Topic expansion phase concluded. The last processed year was {last_expansion_year}.")
+        
+        checkpoint_data["last_expansion_year"] = last_expansion_year
+        checkpoint_data["phase_1_topic_expansion_completed"] = True
+        _save_checkpoint(normalized_disease_name, checkpoint_data)
+    else:
+        logger.info(f"Skipping Phase 1: Iterative Topic Expansion (completed in a previous run). Last processed year: {last_expansion_year}")
 
     # ===================================================================================
     # PHASE 2: Models Development
@@ -43,43 +59,73 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
     today_year = datetime.datetime.now().year
     year_range = today_year - model_dev_start_year
     
-    model_dev_end_year = model_dev_start_year + train_val_test_split[0] * year_range
-
-    logger.info(f"Model development phase will run from {model_dev_start_year} to {model_dev_end_year}.")
-    logger.info("Running full data collection...")
+    if model_dev_end_year is None:
+        model_dev_end_year = int(model_dev_start_year + train_val_test_split[0] * year_range)
+        checkpoint_data["model_dev_end_year"] = model_dev_end_year
+        _save_checkpoint(normalized_disease_name, checkpoint_data)
     
-    for year in range(model_dev_start_year, today_year + 1):
-        logger.info(f"Collecting data for year {year}...")
-        dc = DataCollection(disease_name=disease_name, target_year=year)
-        dc.run()
+    logger.info(f"Model development phase will run from {model_dev_start_year} to {int(model_dev_end_year)}.")
 
-    logger.info("Full data collection complete.")
-    logger.info("Running full preprocessing...")
-    
-    preprocessor = Preprocessing(disease_name=disease_name, target_year=today_year, incremental=False)
-    preprocessor.run(force_full=True)
+    # Checkpoint 2: Full Data Collection
+    if not checkpoint_data["phase_2_data_collection_completed"]:
+        logger.info("Running full data collection...")
+        for year in range(model_dev_start_year, today_year + 1):
+            logger.info(f"Collecting data for year {year}...")
+            dc = DataCollection(disease_name=disease_name, target_year=year)
+            dc.run()
+        logger.info("Full data collection complete.")
+        checkpoint_data["phase_2_data_collection_completed"] = True
+        _save_checkpoint(normalized_disease_name, checkpoint_data)
+    else:
+        logger.info(f"Skipping Step 2: Data Collection (completed in a previous run).")
 
-    logger.info("Full preprocessing complete.")
+    # Checkpoint 3: Full Data Preprocessing
+    if not checkpoint_data["phase_2_preprocessing_completed"]:
+        logger.info("Running full preprocessing...")
+        preprocessor = Preprocessing(disease_name=disease_name, target_year=today_year, incremental=False)
+        preprocessor.run(force_full=True)
+        logger.info("Full preprocessing complete.")
+        checkpoint_data["phase_3_preprocessing_completed"] = True
+        _save_checkpoint(normalized_disease_name, checkpoint_data)
+    else:
+        logger.info(f"Skipping Step 3: Preprocessing (completed in a previous run).")
+
     logger.info("Starting AutoML training for all candidate models...")
 
-    # ---------------------------------------------------------------------
-    #
-    # Aqui vem o treinamento de todos os modelos até model_dev_end_year.
-    # Dicionário com todos os modelos?
-    #
-    # ---------------------------------------------------------------------
+    # Checkpoint 4: AutoML Training
+    if not checkpoint_data["phase_4_automl_training_completed"]:
+        # TODO: Aqui vem o treinamento de todos os modelos até model_dev_end_year.
+        # Dicionário com todos os modelos?
+        cmt = CandidateModelTraining(
+            disease_name=disease_name,
+            start_year=model_dev_start_year,
+            end_year=model_dev_end_year
+        )
+        models = cmt.run()
+        
+        checkpoint_data["trained_models_info"] = models
+        checkpoint_data["phase_4_automl_training_completed"] = True
+        _save_checkpoint(normalized_disease_name, checkpoint_data)
+    else:
+        logger.info(f"Skipping Step 4: AutoML Training (completed in a previous run).")
+        models = checkpoint_data.get("trained_models_info")
 
     logger.info("AutoML training complete.")
 
-    logger.info("Generating metrics for all compounds for each model...")
-    validator = ValidationModule(
-        disease_name=disease_name,
-        start_year=model_dev_start_year,
-        end_year=model_dev_end_year
-    )
-    validator.run()
-    logger.info("Metric generation complete for all models.")
-
+    # Checkpoint 5: Metric Generation
+    if not checkpoint_data["phase_5_metric_generation_completed"]:
+        logger.info("Generating metrics for all compounds for each model...")
+        validator = ValidationModule(
+            disease_name=disease_name,
+            start_year=model_dev_end_year,
+            end_year=model_dev_end_year
+        )
+        validator.run()
+        logger.info("Metric generation complete for all models.")
+        checkpoint_data["phase_5_metric_generation_completed"] = True
+        _save_checkpoint(normalized_disease_name, checkpoint_data)
+    else:
+        logger.info(f"Skipping Step 5: Metric Generation (completed in a previous run).")
 
     # ===================================================================================
     # PHASE 3: Selection
@@ -89,34 +135,53 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
     logger.info("="*80)
 
     model_selection_start_year = model_dev_end_year + 1
-    model_selection_end_year = model_selection_start_year + train_val_test_split[1] * year_range
+    
+    if model_selection_end_year is None:
+        model_selection_end_year = int(model_selection_start_year + train_val_test_split[1] * year_range)
+        checkpoint_data["model_selection_end_year"] = model_selection_end_year
+        _save_checkpoint(normalized_disease_name, checkpoint_data)
 
-    # --- TO BE IMPLEMENTED ---
-    # 
-    # logger.info("Selecting the best model based on latent knowledge metrics...")
-    #
-    # selector = ModelSelector(
-    #     disease_name=disease_name,
-    #     start_year=model_selection_start_year,
-    #     end_year=model_selection_end_year
-    # )
-    #
-    # --------------------------------------------------------------------------------
-    #
-    # Esse método vai ler os top_n de cada modelos, rodar o método de pontuação,
-    # e escolher o que retornou melhor pontuação.
-    #
-    # Para rodar o método de pontuação, precisamos ter os top_n_compounds de cada ano.
-    # Para isso, precisamos rodar cada modelo ITERATIVAMENTE de model_selection_start_year
-    # até model_selection_end_year.
-    #
-    # O nome do modelo vai ser a chave dele no dicionário e o nome da pasta dele.
-    #
-    # --------------------------------------------------------------------------------
-    #
-    # best_model = selector.select_best_model()
-    #
-    # logger.info(f"Best model selected: {best_model}")
+    # Checkpoint 6: Model Selection
+    if not checkpoint_data["phase_6_model_selection_completed"]:
+        logger.info("Selecting the best model based on latent knowledge metrics...")
+        
+        selector = ModelSelector(
+            disease_name=disease_name,
+            models=models, # <--- dicionário retornado na etapa anterior
+            start_year=model_selection_start_year,
+            end_year=model_selection_end_year
+        )
+
+        # --------------------------------------------------------------------------------
+        #
+        # Esse método vai ler os top_n de cada modelos, rodar o método de pontuação,
+        # e escolher o que retornou melhor pontuação.
+        #
+        # Para rodar o método de pontuação, precisamos ter os top_n_compounds de cada ano.
+        # Para isso, precisamos rodar cada modelo ITERATIVAMENTE de model_selection_start_year
+        # até model_selection_end_year.
+        #
+        # O nome do modelo vai ser a chave dele no dicionário e o nome da pasta dele.
+        #
+        # - Treina todos os modelos do dicionário com artigos até start_year, start_year + 1,
+        #   ..., end_year - 1, end_year.
+        # - Gera as métricas dos compostos para cada um dos modelos treinados e top_n
+        # - Latent knowledge score para cada um dos modelos
+        # - Escolhe melhor
+        #
+        # --------------------------------------------------------------------------------
+        
+        best_model = selector.select_best_model()
+        
+        logger.info(f"Best model selected: {best_model}")
+
+        checkpoint_data["best_model_name"] = best_model
+        checkpoint_data["phase_6_model_selection_completed"] = True
+        _save_checkpoint(normalized_disease_name, checkpoint_data)
+    else:
+        logger.info(f"Skipping Step 6: Model Selection (completed in a previous run).")
+        best_model = checkpoint_data.get("best_model_name", "None")
+
 
     # ===================================================================================
     # PHASE 4: Final Test / Report
@@ -128,24 +193,34 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
     test_start_year = model_selection_end_year + 1
     test_end_year = today_year
 
-    logger.info(f"Generating final report using the selected model: '{best_model}'...")
-    #
-    # final_reporter = LatentKnowledgeReportGenerator(
-    #     disease_name=disease_name,
-    #     model_type=best_model,
-    #     target_year=today_year,
-    # )
-    #
     # --------------------------------------------------------------------------------
-    #
-    # Esse aqui vai só rodar iterativamente para cada ano de test_start_year até
-    # test_end_year, calcular a pontuação de conhecimento latente dnv e pronto.
-    #
+    # Checkpoint 7: Final Report Generation
     # --------------------------------------------------------------------------------
-    #
-    # final_reporter.run(generate_latex=True)
-    #
-    logger.info("Final report generation complete.")
+    if not checkpoint_data["phase_7_final_report_completed"]:
+        logger.info(f"Generating final report using the selected model: '{best_model}'...")
+        
+        me = ModelEvaluator(best_model, test_start_year, test_end_year)
+        
+        # --------------------------------------------------------------------------------
+        #
+        # Esse aqui vai só rodar iterativamente para cada ano de test_start_year até
+        # test_end_year, calcular a pontuação de conhecimento latente dnv e pronto.
+        #
+        # - Treina o melhor modelo com artigos até start_year, start_year + 1,
+        #   ..., end_year - 1, end_year.
+        # - Gera as métricas dos compostos e top_n de cada ano
+        # - Latent knowledge score para avaliar
+        # - Avaliação manual dos top_n
+        #
+        # --------------------------------------------------------------------------------
+        
+        me.run(generate_latex=True)
+        
+        logger.info("Final report generation complete.")
+        checkpoint_data["phase_7_final_report_completed"] = True
+        _save_checkpoint(normalized_disease_name, checkpoint_data)
+    else:
+        logger.info(f"Skipping Step 7: Final Report Generation (completed in a previous run).")
 
 
     logger.info("="*80)

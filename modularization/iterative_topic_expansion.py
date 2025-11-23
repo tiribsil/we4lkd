@@ -20,7 +20,7 @@ class IterativeTopicExpansion:
 
         self.base_path = Path('./data') / self.normalized_disease_name
         self.topics_file = self.base_path / 'topics_of_interest.txt'
-        self.last_expansion_year_file = self.base_path / 'last_expansion_year.txt'
+
 
     def _get_current_topics_count(self) -> int:
         if not self.topics_file.exists():
@@ -38,24 +38,7 @@ class IterativeTopicExpansion:
             self.topics_file.write_text(self.disease_name + '\n', encoding='utf-8')
             self.logger.info(f"Initialized topics_of_interest.txt with '{self.disease_name}'.")
 
-        # Check if topics are already full from a previous run
-        if self._get_current_topics_count() >= self.max_topics:
-            if self.last_expansion_year_file.exists():
-                with open(self.last_expansion_year_file, 'r') as f:
-                    year = int(f.read().strip())
-                    self.logger.info(f"Topics already full. Returning saved expansion year: {year}.")
-                    return year
-            else:
-                self.logger.warning("Topics full, but no saved expansion year found. Cannot proceed without a valid year.")
-                # Fallback: determine start year dynamically if topics are full but year not saved
-                temp_dc_for_year_finding = DataCollection(self.disease_name, target_year=datetime.datetime.now().year) # Year is irrelevant here
-                start_year = temp_dc_for_year_finding.get_first_publication_year()
-                if start_year is None:
-                    start_year = 1970 # Default fallback year
-                    self.logger.warning(f"Could not determine start year dynamically. Defaulting to {start_year}.")
-                else:
-                    self.logger.info(f"Dynamically determined start year: {start_year} as fallback.")
-                return start_year
+
 
         self.logger.info("Determining start year based on topics...")
         # We need a temporary DC instance just to get the start year
@@ -111,8 +94,7 @@ class IterativeTopicExpansion:
             embedding_trainer = FixedEmbeddingTraining(
                 disease_name=self.disease_name,
                 start_year=start_year,
-                end_year=current_year,
-                model_type='word2vec'
+                end_year=current_year
             )
             if not embedding_trainer.run():
                 self.logger.error("Embedding training failed. Skipping.")
@@ -154,9 +136,7 @@ class IterativeTopicExpansion:
         
         self.logger.info("Iterative topic expansion process finished.")
         final_expansion_year = current_year - 1
-        with open(self.last_expansion_year_file, 'w') as f:
-            f.write(str(final_expansion_year))
-        self.logger.info(f"Saved final expansion year {final_expansion_year} to {self.last_expansion_year_file}.")
+        self.logger.info(f"Iterative topic expansion process finished. Final expansion year: {final_expansion_year}.")
         return final_expansion_year
 
 if __name__ == '__main__':
