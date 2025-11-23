@@ -5,8 +5,9 @@ from iterative_topic_expansion import IterativeTopicExpansion
 from data_collection_module import DataCollection
 from preprocessing_module import Preprocessing
 from embeddings_training_automl import SequentialEmbeddingTrainingAutoML, ModelType
+from candidate_model_training_module import CandidateModelTraining
 from dotproduct_generation_module import ValidationModule
-from selection_module import ModelSelector
+from model_selector_module import ModelSelector
 from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 from utils import LoggerFactory, _load_checkpoint, _save_checkpoint, normalize_disease_name
 
@@ -80,7 +81,7 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
         logger.info(f"Skipping Step 2: Data Collection (completed in a previous run).")
 
     # Checkpoint 3: Full Data Preprocessing
-    if not checkpoint_data["phase_2_preprocessing_completed"]:
+    if not checkpoint_data["phase_3_preprocessing_completed"]:
         logger.info("Running full preprocessing...")
         preprocessor = Preprocessing(disease_name=disease_name, target_year=today_year, incremental=False)
         preprocessor.run(force_full=True)
@@ -90,12 +91,10 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
     else:
         logger.info(f"Skipping Step 3: Preprocessing (completed in a previous run).")
 
-    logger.info("Starting AutoML training for all candidate models...")
+    logger.info("Starting candidate model training...")
 
-    # Checkpoint 4: AutoML Training
+    # Checkpoint 4: Candidate Model Training
     if not checkpoint_data["phase_4_automl_training_completed"]:
-        # TODO: Aqui vem o treinamento de todos os modelos até model_dev_end_year.
-        # Dicionário com todos os modelos?
         cmt = CandidateModelTraining(
             disease_name=disease_name,
             start_year=model_dev_start_year,
@@ -107,10 +106,10 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
         checkpoint_data["phase_4_automl_training_completed"] = True
         _save_checkpoint(normalized_disease_name, checkpoint_data)
     else:
-        logger.info(f"Skipping Step 4: AutoML Training (completed in a previous run).")
+        logger.info(f"Skipping Step 4: Candidate Model Training (completed in a previous run).")
         models = checkpoint_data.get("trained_models_info")
 
-    logger.info("AutoML training complete.")
+    logger.info("Candidate model training complete.")
 
     # Checkpoint 5: Metric Generation
     if not checkpoint_data["phase_5_metric_generation_completed"]:

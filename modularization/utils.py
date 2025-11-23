@@ -67,8 +67,7 @@ def normalize_disease_name(disease_name: str) -> str:
         return disease_name.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
 
 def _get_checkpoint_path(disease_name: str) -> Path:
-    normalized_name = normalize_disease_name(disease_name)
-    return Path(f"artifacts/{normalized_name}_pipeline_checkpoint.json")
+    return Path(f"artifacts/{disease_name}_pipeline_checkpoint.json")
 
 def _load_checkpoint(disease_name: str) -> dict:
     checkpoint_path = _get_checkpoint_path(disease_name)

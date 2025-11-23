@@ -40,7 +40,6 @@ class EmbeddingConfig:
     pca_components: Optional[int] = None
     vector_size: int = 300
     custom_params: Dict[str, Any] = field(default_factory=dict)
-    use_pretrained: bool = False  
     end_year: int = None
 
 
@@ -399,96 +398,107 @@ class FastTextModel(BaseEmbeddingModel):
         return self.apply_pca(embeddings)
 
 
+import logging
+import itertools
+import gc # Adicionado para gerenciamento de memória
+
+from mittens import Mittens, GloVe # Alterado para Mittens
+
+
 class GloVeModel(BaseEmbeddingModel):
-    """GloVe embedding model"""
-    
-    GLOVE_URL = "http://nlp.stanford.edu/data/glove.6B.zip"
-    GLOVE_FILENAME = "glove.6B.300d.txt"
-    WORD2VEC_FILENAME = "glove.6B.300d.word2vec.txt"
-    
-    @staticmethod
-    def _ensure_glove_downloaded(glove_dir: str) -> str:
-        """Download and convert GloVe if needed (process-safe)."""
-        import fcntl
+    """GloVe embedding model trained from scratch using Mittens."""
+
+    def train(self, sentences: List[List[str]]) -> None:
+        # Expected hyperparameters for GloVe training:
+        # [vector_size, window, max_iter, learning_rate, min_count, x_max]
+        params = {
+            'vector_size': self.config.vector_size,
+            'window': self.config.custom_params.get('window', 5),
+            'min_count': self.config.custom_params.get('min_count', 2),
+            'max_iter': self.config.custom_params.get('max_iter', 15),
+            'alpha': self.config.custom_params.get('alpha', 0.05),
+            'learning_rate': self.config.custom_params.get('learning_rate', 0.05),
+            'x_max': self.config.custom_params.get('x_max', 100),
+        }
+
+        self.logger.info(f"Training GloVe model with Mittens using params: {params}")
+
+        # 1. Create Corpus for GloVe and build co-occurrence matrix
+        # Flatten list of lists for vocabulary extraction, then build co-occurrence
+        all_words = list(itertools.chain.from_iterable(sentences))
+        vocab = {word: i for i, word in enumerate(sorted(set(all_words)))} # Ensure consistent vocabulary order
+
+        # Filter vocabulary by min_count
+        word_counts = pd.Series(all_words).value_counts()
+        filtered_vocab_list = word_counts[word_counts >= params['min_count']].index.tolist()
+        filtered_vocab = {word: i for i, word in enumerate(sorted(filtered_vocab_list))}
+
+        if not filtered_vocab:
+            self.logger.warning("No words left after min_count filtering for GloVe. Skipping training.")
+            self.model = None
+            self.word_vectors_keyed_vectors = KeyedVectors(vector_size=params['vector_size'])
+            return
+
+        # Mittens expects raw sentences (list of lists of words)
+        # It uses gensim's build_cooccurrence_matrix internally
+        cooc_model = GloVe(params['window'])
+        cooc_matrix = cooc_model.build_cooccurrence_matrix(sentences, vocabulary=filtered_vocab, min_count=params['min_count'])
         
-        os.makedirs(glove_dir, exist_ok=True)
-        w2v_path = os.path.join(glove_dir, GloVeModel.WORD2VEC_FILENAME)
-        lock_path = os.path.join(glove_dir, ".download.lock")
+        # 2. Initialize and train Mittens model
+        mittens_model = Mittens(
+            n=params['vector_size'],
+            max_iter=params['max_iter'],
+            eta=params['learning_rate'],
+            alpha=params['alpha'], # Although GloVe itself doesn't use alpha directly in its objective, mittens includes it.
+            max_count=params['x_max'],
+            # Note: GloVe from mittens does not directly expose 'workers' for multi-threading like gensim
+        )
+
+        # Train the model
+        mittens_model.fit(cooc_matrix)
+
+        # 3. Store word vectors in Gensim KeyedVectors format for compatibility
+        self.model = mittens_model
+        self.vocabulary = list(filtered_vocab.keys())
+        self.word_vectors_keyed_vectors = KeyedVectors(vector_size=params['vector_size'])
+
+        # Add vectors to KeyedVectors object
+        for i, word in enumerate(self.vocabulary):
+            self.word_vectors_keyed_vectors.add_vector(word, mittens_model.get_embedding(word))
         
-        if os.path.exists(w2v_path):
-            return w2v_path
-        
-        with open(lock_path, 'w') as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            
-            try:
-                if os.path.exists(w2v_path):
-                    return w2v_path
-                
-                logger = logging.getLogger("GloVeDownloader")
-                glove_path = os.path.join(glove_dir, GloVeModel.GLOVE_FILENAME)
-                
-                if not os.path.exists(glove_path):
-                    zip_path = os.path.join(glove_dir, "glove.6B.zip")
-                    logger.info(f"Downloading GloVe to {zip_path}...")
-                    wget.download(GloVeModel.GLOVE_URL, zip_path)
-                    logger.info("\nExtracting...")
-                    with ZipFile(zip_path, "r") as zip_ref:
-                        zip_ref.extractall(glove_dir)
-                    logger.info("Extraction complete")
-                
-                logger.info("Converting GloVe to word2vec format...")
-                glove2word2vec(glove_path, w2v_path)
-                logger.info("Conversion complete")
-                
-                return w2v_path
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-    
-    def train(self, sentences: List[List[str]], glove_dir: str = "./glove") -> None:
-        """Load GloVe embeddings"""
-        if not self.config.use_pretrained:
-            self.logger.warning("GloVe without pretraining is not supported. Using pretrained.")
-            self.logger.warning("Consider using Word2Vec or FastText for fair comparison.")
-        
-        w2v_path = self._ensure_glove_downloaded(glove_dir)
-        
-        self.logger.info(f"Loading GloVe from {w2v_path}...")
-        full_model = KeyedVectors.load_word2vec_format(w2v_path, binary=False)
-        
-        corpus_vocab = set(word.lower() for sent in sentences for word in sent)
-        filtered_words = [w for w in full_model.key_to_index.keys() if w in corpus_vocab]
-        
-        if not filtered_words:
-            self.logger.warning("No GloVe words found in corpus! Using full GloVe.")
-            self.model = full_model
-        else:
-            filtered_vectors = np.array([full_model[w] for w in filtered_words])
-            self.model = KeyedVectors(vector_size=full_model.vector_size)
-            self.model.add_vectors(filtered_words, filtered_vectors)
-            self.logger.info(f"GloVe filtered: {len(filtered_words)} words (from {len(full_model)} total)")
-        
-        self.sentences = [' '.join(sent) for sent in sentences]
-    
+        self.logger.info(f"GloVe trained: {len(self.vocabulary)} words, {len(mittens_model.get_vectors())} embeddings")
+
+        # Clean up large objects
+        del cooc_matrix
+        del all_words
+        del vocab
+        del word_counts
+        del filtered_vocab
+        gc.collect()
+
     def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
-        """Get sentence embeddings by averaging word vectors."""
+        """
+        Get sentence embeddings by averaging word vectors or all word vectors if no sentences provided.
+        Returns a numpy array of embeddings.
+        """
+        if self.model is None or self.word_vectors_keyed_vectors is None:
+            return np.array([])
+
         if sentences:
-            texts = sentences
+            embeddings = []
+            for sentence in sentences:
+                words = sentence.lower().split()
+                vectors = [self.word_vectors_keyed_vectors[w] 
+                           for w in words if w in self.word_vectors_keyed_vectors.key_to_index]
+                if vectors:
+                    embeddings.append(np.mean(vectors, axis=0))
+                else:
+                    embeddings.append(np.zeros(self.config.vector_size))
+            embeddings = np.array(embeddings)
         else:
-            texts = getattr(self, 'sentences', [])
-            if not texts:
-                return self.apply_pca(self.model.vectors)
+            # Return all word embeddings if no specific sentences are provided
+            embeddings = self.word_vectors_keyed_vectors.vectors
         
-        embeddings = []
-        for text in texts:
-            words = text.lower().split()
-            vectors = [self.model[w] for w in words if w in self.model]
-            if vectors:
-                embeddings.append(np.mean(vectors, axis=0))
-            else:
-                embeddings.append(np.zeros(self.model.vector_size))
-        
-        embeddings = np.array(embeddings)
         return self.apply_pca(embeddings)
 
 
