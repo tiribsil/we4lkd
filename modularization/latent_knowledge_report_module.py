@@ -118,8 +118,20 @@ class LatentKnowledgeReportGenerator:
         compounds = df['chemical_name'].unique()
         
         for compound in compounds:
-            subset = df[df['chemical_name'] == compound]
-            ax.plot(subset['year'], subset[metric], marker='o', markersize=4, label=compound)
+            subset = df[df['chemical_name'] == compound].copy()
+
+            # Converter explicitamente para numpy arrays (evita indexing multi-dimensional em pandas)
+            x = pd.to_numeric(subset['year'], errors='coerce').to_numpy()
+            y = pd.to_numeric(subset.get(metric, pd.Series([])), errors='coerce').to_numpy()
+
+            # Filtrar valores inválidos
+            if x.size == 0 or y.size == 0:
+                continue
+            mask = ~np.isnan(x) & ~np.isnan(y)
+            if not mask.any():
+                continue
+
+            ax.plot(x[mask], y[mask], marker='o', markersize=4, label=compound)
 
         ax.set_title(f"Top {len(compounds)} Compounds: {metric} ({self.target_year})", fontsize=14)
         ax.set_xlabel("Year")

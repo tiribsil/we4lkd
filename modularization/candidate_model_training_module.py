@@ -5,10 +5,12 @@ import pandas as pd
 from gensim.models import Word2Vec, FastText, KeyedVectors
 import numpy as np
 import shutil
+from scipy.stats import qmc
+import concurrent.futures
+import os
 
 from utils import LoggerFactory, normalize_disease_name
-# Mantemos o import do EmbeddingConfig e ModelFactory pois são utilitários de construção de classes,
-# não o processo de AutoML em si.
+
 from embeddings_training_automl import ModelType, EmbeddingConfig, ModelFactory, GloVeModel as MittensGloVeModel
 
 class CandidateModelTraining:
@@ -25,13 +27,7 @@ class CandidateModelTraining:
         self.start_year = start_year
         self.end_year = end_year
         
-        # Dicionário padrão para a fase de geração de candidatos
-        self.model_combinations: Dict[str, List[Any]] = {
-            "w2v_comb1": [200, 5, 2, 1, 15, 0.025, 15, 4], 
-            "w2v_comb2": [200, 10, 3, 0, 5, 0.03, 20, 4],  
-            "ft_comb1": [100, 5, 2, 1, 10, 0.025, 15, 4, 3, 6],   
-            "glove_comb1": [300, 8, 30, 0.05, 5, 100] 
-        }
+        self.model_combinations: Dict[str, List[Any]] = {}
 
         self.base_path = Path(f'./data/{self.disease_name}')
         self.corpus_path = Path(f'{self.base_path}/corpus/clean_abstracts/clean_abstracts.csv')
@@ -95,9 +91,14 @@ class CandidateModelTraining:
         if architecture == 'w2v':
             model_type = ModelType.WORD2VEC
             custom_params = {
-                'vector_size': params[0], 'window': params[1], 'min_count': params[2],
-                'sg': params[3], 'negative': params[4], 'alpha': params[5],
-                'epochs': params[6], 'workers': params[7]
+                'vector_size': params[0], 
+                'window': params[1], 
+                'min_count': params[2],
+                'sg': params[3], 
+                'negative': params[4], 
+                'alpha': params[5],
+                'epochs': params[6], 
+                'workers': params[7]
             }
         elif architecture == 'ft':
             model_type = ModelType.FASTTEXT
@@ -185,35 +186,164 @@ class CandidateModelTraining:
         
         self.logger.info(f"Saved: {model_path}")
 
-    def run(self) -> Dict[str, List[Any]]:
+    # Inseridas: funções LHS e run como métodos da classe (substituem as versões globais)
+    def _scale_and_cast(self, sample: np.ndarray, low: float, high: float, dtype: str):
+        """Scale sample in [0,1) to [low, high] and cast according to dtype ('int'|'float'|'bin')."""
+        val = low + sample * (high - low)
+        if dtype == 'int':
+            v = int(np.round(val))
+            v = max(int(low), min(int(high), v))
+            return v
+        elif dtype == 'bin':
+            # threshold at 0.5
+            return int(val >= 0.5)
+        else:
+            return float(val)
+
+    def _generate_lhs_samples(self, param_specs: List[tuple], n_samples: int) -> List[Dict[str, Any]]:
         """
-        Executa o treinamento de TODOS os candidatos definidos em self.model_combinations
-        (Fase 4 do pipeline principal).
+        param_specs: list of tuples (name, low, high, dtype)
+        dtype: 'int', 'float', 'bin'
+        returns list of dicts mapping param name to sampled value
         """
-        self.logger.info("=== Starting Candidate Training (Bulk) ===")
-        trained_models = {}
-        
-        sentences = self._prepare_sentences(self.start_year, self.end_year)
-        if not sentences: return {}
-        
-        for model_key, params in self.model_combinations.items():
-            arch = model_key.split('_')[0]
-            config = self._create_config_from_params(arch, params, self.end_year)
-            
-            if config:
-                try:
-                    self.logger.info(f"Bulk training {model_key}...")
-                    model = ModelFactory.create_model(config)
-                    model.train(sentences)
-                    self._save_trained_model(model, model_key, self.start_year, self.end_year)
-                    trained_models[model_key] = params
-                except Exception as e:
-                    self.logger.error(f"Error training {model_key}: {e}")
-        
+        d = len(param_specs)
+        sampler = qmc.LatinHypercube(d=d, seed=None)
+        raw = sampler.random(n=n_samples)  # shape (n_samples, d)
+        out = []
+        for i in range(n_samples):
+            row = {}
+            for j, (name, low, high, dtype) in enumerate(param_specs):
+                row[name] = self._scale_and_cast(raw[i, j], low, high, dtype)
+            out.append(row)
+        return out
+
+    def run(self, sentences: List[List[str]], trained_models: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Perform LHS (7 samples per model family) and train Word2Vec, FastText, and GloVe models in parallel.
+        Appends entries into the provided trained_models dict with keys 'w2v_i', 'ft_i', 'glove_i'
+        and values {'model': trained_model_object, 'hyperparameters': {...}}.
+
+        sentences: list of tokenized sentences (List[List[str]])
+        trained_models: dict to populate and return
+        """
+        if trained_models is None:
+            trained_models = {}
+
+        n_sets = 7
+
+        # Define parameter specs for each model: (name, low, high, dtype)
+        w2v_specs = [
+            ('vector_size', 100, 300, 'int'),
+            ('window', 2, 10, 'int'),
+            ('min_count', 1, 5, 'int'),
+            ('sg', 0, 1, 'bin'),
+            ('negative', 5, 15, 'int'),
+            ('alpha', 0.01, 0.05, 'float'),
+            ('epochs', 5, 50, 'int'),
+            ('workers', 1, 8, 'int'),
+        ]
+
+        ft_specs = [
+            ('vector_size', 50, 200, 'int'),
+            ('window', 2, 10, 'int'),
+            ('min_count', 1, 5, 'int'),
+            ('sg', 0, 1, 'bin'),
+            ('negative', 5, 15, 'int'),
+            ('alpha', 0.01, 0.05, 'float'),
+            ('epochs', 5, 50, 'int'),
+            ('workers', 1, 8, 'int'),
+            ('min_n', 2, 3, 'int'),
+            ('max_n', 4, 6, 'int'),
+        ]
+
+        glove_specs = [
+            ('vector_size', 50, 300, 'int'),
+            ('window', 2, 8, 'int'),
+            ('max_iter', 20, 100, 'int'),
+            ('learning_rate', 0.01, 0.2, 'float'),
+            ('min_count', 1, 5, 'int'),
+            ('x_max', 10, 100, 'int'),
+        ]
+
+        # Sample LHS sets
+        w2v_sets = self._generate_lhs_samples(w2v_specs, n_sets)
+        ft_sets = self._generate_lhs_samples(ft_specs, n_sets)
+        glove_sets = self._generate_lhs_samples(glove_specs, n_sets)
+
+        # Build task list
+        tasks = []
+        for idx, hp in enumerate(w2v_sets, start=1):
+            tasks.append(('w2v', idx, hp))
+        for idx, hp in enumerate(ft_sets, start=1):
+            # Ensure max_n >= min_n
+            if hp['max_n'] < hp['min_n']:
+                hp['max_n'], hp['min_n'] = hp['min_n'], hp['max_n']
+            tasks.append(('ft', idx, hp))
+        for idx, hp in enumerate(glove_sets, start=1):
+            tasks.append(('glove', idx, hp))
+
+        # Worker function
+        def _worker(task):
+            family, idx, hp = task
+            key = f"{family}_{idx}"
+            try:
+                if family == 'w2v':
+                    model = Word2Vec(
+                        vector_size=hp['vector_size'],
+                        window=hp['window'],
+                        min_count=hp['min_count'],
+                        sg=hp['sg'],
+                        negative=hp['negative'],
+                        alpha=hp['alpha'],
+                        workers=hp['workers'],
+                    )
+                    model.build_vocab(sentences)
+                    model.train(sentences, total_examples=model.corpus_count, epochs=hp['epochs'])
+                    return key, {'model': model, 'hyperparameters': dict(hp)}
+                elif family == 'ft':
+                    model = FastText(
+                        vector_size=hp['vector_size'],
+                        window=hp['window'],
+                        min_count=hp['min_count'],
+                        sg=hp['sg'],
+                        negative=hp['negative'],
+                        alpha=hp['alpha'],
+                        workers=hp['workers'],
+                        min_n=hp['min_n'],
+                        max_n=hp['max_n'],
+                    )
+                    model.build_vocab(sentences)
+                    model.train(sentences, total_examples=model.corpus_count, epochs=hp['epochs'])
+                    return key, {'model': model, 'hyperparameters': dict(hp)}
+                else:  # glove
+                    # import locally to avoid hard dependency at module import time
+                    from glove import Corpus, Glove
+                    corpus = Corpus()
+                    corpus.fit(sentences, window=hp['window'])
+                    glove = Glove(no_components=hp['vector_size'], learning_rate=hp['learning_rate'])
+                    glove.fit(corpus.matrix, epochs=hp['max_iter'], no_threads=1, verbose=False)
+                    glove.add_dictionary(corpus.dictionary)
+                    return key, {'model': glove, 'hyperparameters': dict(hp)}
+            except Exception as e:
+                return key, {'model': None, 'hyperparameters': dict(hp), 'error': str(e)}
+
+        # Determine number of workers: limit by CPU and number of tasks
+        max_workers = min((os.cpu_count() or 4), len(tasks))
+        if max_workers < 1:
+            max_workers = 1
+
+        # Execute in parallel and collect results
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as exc:
+            future_to_task = {exc.submit(_worker, t): t for t in tasks}
+            for fut in concurrent.futures.as_completed(future_to_task):
+                key, result = fut.result()
+                trained_models[key] = result
+
         return trained_models
 
 if __name__ == '__main__':
     # Teste
     t = CandidateModelTraining("acute myeloid leukemia", 1990, 2000)
     # Exemplo de treino específico
-    t.train_specific_model("w2v_test", [100, 5, 2, 1, 5, 0.025, 5, 4], 1995)
+    #t.train_specific_model("w2v_test", [100, 5, 2, 1, 5, 0.025, 5, 4], 1995)
+    trained_models = t.run(sentences, trained_models)
