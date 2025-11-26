@@ -46,7 +46,7 @@ class IterativeTopicExpansion:
         start_year = temp_dc_for_year_finding.get_first_publication_year()
 
         if start_year is None:
-            start_year = 1970 # Default fallback year
+            start_year = 1950 # Default fallback year
             self.logger.warning(f"Could not determine start year dynamically. Defaulting to {start_year}.")
         else:
             self.logger.info(f"Dynamically determined start year: {start_year}")
@@ -107,6 +107,7 @@ class IterativeTopicExpansion:
             self.logger.info("Running Dot Product Generation module...")
             validator = ValidationModule(
                 disease_name=self.disease_name,
+                model_subfolder='w2v_fixed', 
                 start_year=start_year,
                 end_year=current_year,
                 use_chembl=True
@@ -116,18 +117,14 @@ class IterativeTopicExpansion:
 
             # 5. Latent Knowledge Report and Feedback
             self.logger.info("Running Latent Knowledge Report module for feedback...")
+            
             report_generator = LatentKnowledgeReportGenerator(
                 disease_name=self.disease_name,
-                model_type='word2vec',
-                top_n_compounds=20, # This can be a parameter
-                delta_threshold=0,
-                target_year=current_year
+                model_subfolder='w2v_fixed',
+                target_year=current_year,
+                top_n_to_plot=20
             )
-            report_generator.run(
-                generate_latex=False,
-                max_new_topics=self.max_new_topics,
-                max_topics=self.max_topics
-            )
+            report_generator.run()
 
             self.logger.info("Latent Knowledge Report and feedback complete.")
             iteration += 1

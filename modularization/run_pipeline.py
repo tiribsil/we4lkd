@@ -107,20 +107,33 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
         _save_checkpoint(normalized_disease_name, checkpoint_data)
     else:
         logger.info(f"Skipping Step 4: Candidate Model Training (completed in a previous run).")
-        models = checkpoint_data.get("trained_models_info")
+    
+    models = checkpoint_data.get("trained_models_info")
 
     logger.info("Candidate model training complete.")
 
     # Checkpoint 5: Metric Generation
     if not checkpoint_data["phase_5_metric_generation_completed"]:
         logger.info("Generating metrics for all compounds for each model...")
-        validator = ValidationModule(
-            disease_name=disease_name,
-            start_year=model_dev_end_year,
-            end_year=model_dev_end_year
-        )
-        validator.run()
+        
+        if not models:
+            logger.error("No models found for metric generation. Skipping.")
+            checkpoint_data["phase_5_metric_generation_completed"] = False # Re-attempt in future
+            _save_checkpoint(normalized_disease_name, checkpoint_data)
+            return
+            
+        for model_name, model_info in models.items():
+            logger.info(f"Generating metrics for model: {model_name}")
+            validator = ValidationModule(
+                disease_name=disease_name,
+                model_subfolder=model_name,
+                start_year=model_dev_end_year,
+                end_year=model_dev_end_year
+            )
+            validator.run()
+            
         logger.info("Metric generation complete for all models.")
+
         checkpoint_data["phase_5_metric_generation_completed"] = True
         _save_checkpoint(normalized_disease_name, checkpoint_data)
     else:
@@ -147,6 +160,7 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
         selector = ModelSelector(
             disease_name=disease_name,
             models=models, # <--- dicionário retornado na etapa anterior
+            corpus_start_year=model_dev_start_year,
             start_year=model_selection_start_year,
             end_year=model_selection_end_year
         )
@@ -232,5 +246,5 @@ if __name__ == '__main__':
         disease_name='acute myeloid leukemia',
         max_topics=9,
         max_new_topics=9,
-        train_val_test_split=[0.8, 0.1, 0.1]
+        train_val_test_split=[0.6, 0.2, 0.2]
     )
