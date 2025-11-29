@@ -8,6 +8,7 @@ from embeddings_training_automl import SequentialEmbeddingTrainingAutoML, ModelT
 from candidate_model_training_module import CandidateModelTraining
 from dotproduct_generation_module import ValidationModule
 from model_selector_module import ModelSelector
+from model_evaluation_module import ModelEvaluator
 from latent_knowledge_report_module import LatentKnowledgeReportGenerator
 from utils import LoggerFactory, _load_checkpoint, _save_checkpoint, normalize_disease_name
 
@@ -212,7 +213,13 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
     if not checkpoint_data["phase_7_final_report_completed"]:
         logger.info(f"Generating final report using the selected model: '{best_model}'...")
         
-        me = ModelEvaluator(best_model, test_start_year, test_end_year)
+        me = ModelEvaluator(
+            disease_name, 
+            best_model, 
+            model_dev_start_year, 
+            test_start_year, 
+            test_end_year
+        )
         
         # --------------------------------------------------------------------------------
         #

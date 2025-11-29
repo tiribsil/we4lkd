@@ -1,0 +1,201 @@
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional
+import pandas as pd
+
+from candidate_model_training_module import CandidateModelTraining
+from dotproduct_generation_module import ValidationModule
+from latent_knowledge_report_module import LatentKnowledgeReportGenerator
+from model_selector_module import GroundTruthGenerator
+from utils import LoggerFactory, normalize_disease_name
+
+class ModelEvaluator:
+    """
+    Módulo responsável pela Fase 4 (Final Test / Report).
+    Executa o treinamento incremental do MELHOR modelo selecionado no período de teste,
+    avalia sua performance final e gera o relatório visual.
+    """
+
+    def __init__(
+        self, 
+        disease_name: str, 
+        model_name: str, 
+        corpus_start_year: int, 
+        test_start_year: int, 
+        test_end_year: int
+    ):
+        self.disease_name = disease_name
+        self.normalized_disease_name = normalize_disease_name(disease_name)
+        self.model_name = model_name
+        
+        self.corpus_start_year = corpus_start_year
+        self.test_start_year = test_start_year
+        self.test_end_year = test_end_year
+        
+        self.logger = LoggerFactory.setup_logger(
+            "ModelEvaluator", 
+            log_to_file=True, 
+            log_file="model_evaluation.log"
+        )
+        
+        self.base_path = Path(f"data/{self.normalized_disease_name}")
+        self.top_n_base_path = self.base_path / "validation" / self.model_name / "top_n_compounds"
+
+        # Instancia o treinador para ter acesso aos hiperparâmetros e métodos de treino
+        self.trainer = CandidateModelTraining(
+            disease_name=disease_name,
+            start_year=corpus_start_year,
+            end_year=test_end_year
+        )
+
+    def _get_model_params(self) -> List[any]:
+        """Recupera os hiperparâmetros do modelo selecionado (ex: w2v_comb2)."""
+        if self.model_name in self.trainer.model_combinations:
+            return self.trainer.model_combinations[self.model_name]
+        else:
+            raise ValueError(f"Model '{self.model_name}' not found in defined combinations.")
+
+    def _calculate_final_performance(self) -> float:
+        """
+        Calcula a métrica 'Mean Years Early' para o período de teste.
+        Reaproveita a lógica do ModelSelector mas focada no relatório final.
+        """
+        self.logger.info("Generating Ground Truth for final evaluation...")
+        gt_gen = GroundTruthGenerator(self.disease_name, self.logger)
+        ground_truth = gt_gen.generate_ground_truth(threshold=3)
+        
+        if not ground_truth:
+            self.logger.warning("No ground truth generated. Score will be 0.")
+            return 0.0
+
+        # Encontrar primeira recomendação no período de teste
+        first_recommendation = {}
+        
+        # Iterar apenas sobre os anos de teste
+        for year in range(self.test_start_year, self.test_end_year + 1):
+            year_path = self.top_n_base_path / str(year)
+            if not year_path.exists(): 
+                continue
+                
+            # Buscar arquivo de score (padrão top_*_score.csv)
+            csv_files = list(year_path.glob("top_*_score.csv"))
+            if not csv_files: continue
+            
+            try:
+                df = pd.read_csv(csv_files[0])
+                col = 'chemical_name' if 'chemical_name' in df.columns else 'compound_name'
+                
+                if col in df.columns:
+                    for compound in df[col].values:
+                        # Só registra se for a primeira vez que vemos e se estiver no Ground Truth
+                        if compound not in first_recommendation and compound in ground_truth:
+                            first_recommendation[compound] = year
+            except Exception as e:
+                self.logger.error(f"Error reading ranking file for year {year}: {e}")
+
+        # Calcular Score
+        scores = []
+        hits = 0
+        details = []
+
+        for compound, rec_year in first_recommendation.items():
+            report_year = ground_truth[compound]
+            how_early = report_year - rec_year
+            
+            scores.append(how_early)
+            hits += 1
+            details.append((compound, rec_year, report_year, how_early))
+
+        if not scores:
+            self.logger.warning("No intersection between recommendations and ground truth in test period.")
+            return 0.0
+
+        mean_early = sum(scores) / len(scores)
+        
+        # Logar detalhes para auditoria
+        self.logger.info(f"\n{'='*40}")
+        self.logger.info(f"FINAL PERFORMANCE: {self.model_name}")
+        self.logger.info(f"Test Period: {self.test_start_year}-{self.test_end_year}")
+        self.logger.info(f"Correct Hits: {hits}")
+        self.logger.info(f"Mean Years Early: {mean_early:.2f}")
+        self.logger.info(f"{'='*40}")
+        
+        # Salvar CSV de validação final
+        details_df = pd.DataFrame(details, columns=['compound', 'recommendation_year', 'literature_report_year', 'years_early'])
+        details_df = details_df.sort_values('years_early', ascending=False)
+        output_csv = self.base_path / "reports" / "final_model_validation.csv"
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        details_df.to_csv(output_csv, index=False)
+        self.logger.info(f"Validation details saved to {output_csv}")
+
+        return mean_early
+
+    def run(self, generate_latex: bool = True) -> bool:
+        """
+        Executa o pipeline de avaliação final.
+        """
+        self.logger.info(f"=== Starting Final Evaluation for '{self.model_name}' ===")
+        
+        try:
+            # 1. Recuperar Parâmetros
+            params = self._get_model_params()
+            self.logger.info(f"Hyperparameters: {params}")
+
+            # 2. Treinamento Incremental (Ano a Ano no período de teste)
+            self.logger.info("--- Step 1: Incremental Training ---")
+            for year in range(self.test_start_year, self.test_end_year + 1):
+                # O método train_specific_model verifica se o modelo já existe antes de treinar
+                success = self.trainer.train_specific_model(self.model_name, params, year)
+                if not success:
+                    self.logger.error(f"Failed to train model for year {year}. Aborting.")
+                    return False
+
+            # 3. Geração de Métricas e Rankings
+            self.logger.info("--- Step 2: Generating Metrics & Rankings ---")
+            # ValidationModule é inteligente o suficiente para processar o range de uma vez
+            validator = ValidationModule(
+                disease_name=self.disease_name,
+                model_subfolder=self.model_name,
+                start_year=self.test_start_year,
+                end_year=self.test_end_year,
+                use_chembl=True,
+                top_n_to_save=50 # Salvamos Top 50 para ter margem de análise
+            )
+            if not validator.run():
+                self.logger.error("Validation module failed.")
+                return False
+
+            # 4. Cálculo de Performance (Score Final)
+            self.logger.info("--- Step 3: Calculating Final Performance ---")
+            self._calculate_final_performance()
+
+            # 5. Geração do Relatório LaTeX
+            if generate_latex:
+                self.logger.info("--- Step 4: Generating LaTeX Report ---")
+                # O ReportGenerator vai pegar os dados gerados pelo ValidationModule
+                # e criar os gráficos e o PDF.
+                reporter = LatentKnowledgeReportGenerator(
+                    disease_name=self.disease_name,
+                    model_subfolder=self.model_name,
+                    target_year=self.test_end_year, # Foca o relatório no último ano
+                    top_n_to_plot=15
+                )
+                reporter.run()
+
+            self.logger.info("=== Final Evaluation Completed Successfully ===")
+            return True
+
+        except Exception as e:
+            self.logger.exception(f"Fatal error in ModelEvaluator: {e}")
+            return False
+
+if __name__ == "__main__":
+    # Exemplo de uso manual
+    evaluator = ModelEvaluator(
+        disease_name="acute myeloid leukemia",
+        model_name="w2v_comb1",
+        corpus_start_year=1990,
+        test_start_year=2021,
+        test_end_year=2024
+    )
+    evaluator.run(generate_latex=True)
