@@ -164,19 +164,145 @@ class ValidationModule:
 
     @lru_cache(maxsize=1)
     def _load_chembl_drugs(self) -> Set[str]:
-        # Implementação idêntica ao original
+        """
+        Carrega lista de 'Small molecule drugs' do ChEMBL.
+        Refinado para buscar apenas moléculas pequenas em fases clínicas 2, 3 ou 4.
+        """
         client = self._get_chembl_client_safe()
-        if not client: return set()
-        # ... (código de carga do chembl)
-        # Simplificação para o exemplo:
-        return set() 
+        if not client:
+            return set()
+        
+        self.logger.info("Fetching 'Small molecule drugs' list from ChEMBL (refined search)...")
+        drug_names_set = set()
+        
+        try:
+            molecule = client.molecule
+            
+            # Filtro refinado conforme o código original funcional
+            approved_drugs_query = molecule.filter(
+                max_phase__in=[2, 3, 4],
+                molecule_type='Small molecule'
+            ).only(['pref_name', 'synonyms'])
+            
+            count = 0
+            for drug in approved_drugs_query:
+                # Nome preferencial
+                if drug.get('pref_name'):
+                    normalized = drug['pref_name'].lower().replace(' ', '')
+                    drug_names_set.add(normalized)
+                
+                # Sinônimos
+                for synonym in drug.get('synonyms', []):
+                    if synonym:
+                        normalized = synonym.lower().replace(' ', '')
+                        drug_names_set.add(normalized)
+                
+                count += 1
+                if count % 5000 == 0:
+                    self.logger.info(f"Processed {count} ChEMBL records...")
+            
+            self.logger.info(f"Loaded {len(drug_names_set)} drug names/synonyms from ChEMBL")
+            return drug_names_set
+            
+        except Exception as e:
+            self.logger.error(f"Error loading ChEMBL data: {e}")
+            return set()
 
     def get_therapeutic_compounds(self) -> Set[str]:
-        # Implementação idêntica ao original, lendo do cache ou gerando
+        """
+        Cria ou carrega a whitelist de compostos terapêuticos.
+        Se o cache não existir, gera a partir do cruzamento ChEMBL + PubChem.
+        """
+        # 1. Tentar carregar do cache
         if self.whitelist_cache_path.exists():
+            self.logger.info(f"Loading whitelist from cache: {self.whitelist_cache_path}")
             with open(self.whitelist_cache_path, 'r', encoding='utf-8') as f:
                 return {line.strip() for line in f if line.strip()}
-        return set() # Placeholder se não tiver arquivo
+        
+        self.logger.info("Cache not found. Generating whitelist from data sources...")
+        
+        # 2. Carregar dados do ChEMBL
+        chembl_drug_names = self._load_chembl_drugs()
+        if not chembl_drug_names:
+            self.logger.warning("Could not obtain drug list from ChEMBL. Aborting whitelist generation.")
+            return set()
+        
+        # 3. Carregar dados do PubChem (CSV)
+        self.logger.info("Loading PubChem data with Pandas...")
+        try:
+            if not self.synonyms_path.exists() or not self.titles_path.exists():
+                raise FileNotFoundError("PubChem files (CID-Synonym-filtered or CID-Title) not found.")
+
+            synonyms_df = pd.read_csv(
+                self.synonyms_path, sep='\t', header=None, 
+                names=['cid', 'synonym'], dtype={'cid': str}
+            )
+            titles_df = pd.read_csv(
+                self.titles_path, sep='\t', header=None, 
+                names=['cid', 'title'], dtype={'cid': str}
+            )
+        except Exception as e:
+            self.logger.error(f"Error loading PubChem data: {e}")
+            return set()
+
+        # 4. Mapear ChEMBL -> PubChem CIDs
+        self.logger.info("Mapping ChEMBL names to PubChem CIDs...")
+        
+        # Criar DF com termos normalizados do ChEMBL
+        chembl_df = pd.DataFrame(list(chembl_drug_names), columns=['chembl_term_normalized'])
+        
+        # Normalizar sinônimos do PubChem
+        synonyms_df['synonym_normalized'] = (
+            synonyms_df['synonym']
+            .str.lower()
+            .str.replace(r'\s+', '', regex=True)
+        )
+        synonyms_df.dropna(subset=['synonym_normalized', 'cid'], inplace=True)
+        
+        # Merge (Inner Join)
+        matched_cids_df = pd.merge(
+            chembl_df,
+            synonyms_df,
+            left_on='chembl_term_normalized',
+            right_on='synonym_normalized',
+            how='inner'
+        )
+        
+        unique_matched_cids = matched_cids_df['cid'].unique()
+        self.logger.info(f"Found {len(unique_matched_cids)} unique CIDs corresponding to therapeutic compounds.")
+        
+        # 5. Obter Títulos Canônicos
+        self.logger.info("Fetching canonical titles...")
+        therapeutic_titles_df = titles_df[titles_df['cid'].isin(unique_matched_cids)]
+        
+        # Normalizar títulos finais
+        normalized_titles = (
+            therapeutic_titles_df['title']
+            .str.lower()
+            .str.replace(r'\s+', '', regex=True)
+        )
+        
+        final_whitelist_set = set(normalized_titles.dropna().unique())
+        
+        # 6. Aplicar Blacklist
+        filtered_whitelist = final_whitelist_set - self.biomolecule_blacklist
+        
+        removed_count = len(final_whitelist_set) - len(filtered_whitelist)
+        self.logger.info(f"Removed {removed_count} generic compounds (blacklist).")
+        self.logger.info(f"Final whitelist contains {len(filtered_whitelist)} compounds.")
+        
+        # 7. Salvar Cache
+        self.logger.info(f"Saving whitelist to cache: {self.whitelist_cache_path}")
+        self.whitelist_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            with open(self.whitelist_cache_path, 'w', encoding='utf-8') as f:
+                for compound in sorted(list(filtered_whitelist)):
+                    f.write(f"{compound}\n")
+        except Exception as e:
+            self.logger.error(f"Error saving cache file: {e}")
+        
+        return filtered_whitelist
 
     def _load_model(self, year: int) -> Optional[Tuple[object, str]]:
         if year in self._models_cache:
