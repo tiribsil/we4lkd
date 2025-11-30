@@ -159,7 +159,7 @@ class ModelEvaluator:
                 start_year=self.test_start_year,
                 end_year=self.test_end_year,
                 use_chembl=True,
-                top_n_to_save=50 # Salvamos Top 50 para ter margem de análise
+                top_n_to_save=20
             )
             if not validator.run():
                 self.logger.error("Validation module failed.")

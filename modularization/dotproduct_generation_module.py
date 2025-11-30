@@ -40,7 +40,7 @@ class ValidationModule:
         'magnesium', 'oxygen', 'nitrogen', 'platinum', 'hydrogenperoxide', 
         'radium', 'potassium', 'agar', 'hemin', 'phorbol12-myristate13-acetate', 
         'methylcellulose(4000cps)', 'insulin', 'triphosphate', 
-        'histaminedihydrochloride', 'water', 'carbon'
+        'histaminedihydrochloride', 'water', 'carbon', 'gold'
     })
     
     def __init__(

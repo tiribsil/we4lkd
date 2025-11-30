@@ -257,7 +257,7 @@ class ModelSelector:
                     start_year=self.start_year,
                     end_year=self.end_year,
                     use_chembl=True,
-                    top_n_to_save=50 
+                    top_n_to_save=20 
                 )
                 if not validator.run():
                     self.logger.warning(f"Validation failed for {model_name}")

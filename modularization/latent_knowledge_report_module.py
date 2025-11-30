@@ -145,7 +145,7 @@ class LatentKnowledgeReportGenerator:
         plt.close(fig)
         self.logger.info(f"Plot saved: {output_path}")
 
-    def feedback_new_topics(self, max_new_topics: int = 8, max_total_topics: int = 50) -> None:
+    def feedback_new_topics(self, max_new_topics: int = 8, max_total_topics: int = 10) -> None:
         """
         Lê potential_treatments.txt (gerado nesta run) e adiciona novos termos
         ao topics_of_interest.txt (global da doença) para futuras buscas.
@@ -272,7 +272,7 @@ class LatentKnowledgeReportGenerator:
             self.logger.error(f"Error generating LaTeX: {e}")
             return None
 
-    def run(self) -> bool:
+    def run(self, max_new_topics: int = 8, max_total_topics: int = 10) -> bool:
         """Executa a geração do relatório e feedback loop."""
         self.logger.info("=== Starting Report Generation ===")
         
@@ -292,7 +292,7 @@ class LatentKnowledgeReportGenerator:
                 
                 # 3. Executar Feedback Loop (Atualiza topics_of_interest.txt)
                 self.logger.info("Running feedback loop...")
-                self.feedback_new_topics()
+                self.feedback_new_topics(max_total_topics=max_total_topics, max_new_topics=max_new_topics)
                 
             except Exception as e:
                 self.logger.error(f"Error saving potential treatments: {e}")

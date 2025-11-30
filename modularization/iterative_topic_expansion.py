@@ -124,7 +124,7 @@ class IterativeTopicExpansion:
                 target_year=current_year,
                 top_n_to_plot=20
             )
-            report_generator.run()
+            report_generator.run(max_topics=max_topics, max_new_topics=max_new_topics)
 
             self.logger.info("Latent Knowledge Report and feedback complete.")
             iteration += 1
@@ -137,9 +137,8 @@ class IterativeTopicExpansion:
         return final_expansion_year
 
 if __name__ == '__main__':
-    # Example usage
     expander = IterativeTopicExpansion(
-        disease_name='acute myeloid leukemia',
+        disease_name='diabetes',
         max_topics=9,
         max_new_topics=9
     )
