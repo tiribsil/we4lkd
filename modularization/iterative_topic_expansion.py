@@ -124,7 +124,7 @@ class IterativeTopicExpansion:
                 target_year=current_year,
                 top_n_to_plot=20
             )
-            report_generator.run(max_topics=max_topics, max_new_topics=max_new_topics)
+            report_generator.run(max_total_topics=self.max_topics, max_new_topics=self.max_new_topics)
 
             self.logger.info("Latent Knowledge Report and feedback complete.")
             iteration += 1

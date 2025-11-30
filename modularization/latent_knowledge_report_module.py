@@ -178,7 +178,7 @@ class LatentKnowledgeReportGenerator:
                 if cand not in existing_topics:
                     existing_topics.add(cand)
                     added_count += 1
-                    if added_count >= max_new_topics:
+                    if added_count >= max_new_topics or len(existing_topics) >= max_total_topics:
                         break
             
             # 4. Salvar
