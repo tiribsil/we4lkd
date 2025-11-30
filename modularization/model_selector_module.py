@@ -15,7 +15,7 @@ class GroundTruthGenerator:
     """
     Responsável por determinar o 'Ground Truth': o ano em que cada composto
     foi de fato reportado na literatura associado à doença em contexto terapêutico.
-    Baseado na lógica de 'validate_recommendations.py'.
+    Inclui sistema de cache para evitar reprocessamento do corpus.
     """
     
     THERAPEUTIC_KEYWORDS = {
@@ -35,6 +35,8 @@ class GroundTruthGenerator:
         self.base_path = Path(f"data/{self.disease_name}")
         self.corpus_path = self.base_path / "corpus/clean_abstracts/clean_abstracts.csv"
         self.whitelist_path = Path("data/compound_whitelist.txt")
+        self.cache_dir = self.base_path / "ground_truth_cache"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         
         # Regex compilation
         self.positive_regex = re.compile(r'\b(?:' + '|'.join(self.THERAPEUTIC_KEYWORDS) + r')\b', re.IGNORECASE)
@@ -60,10 +62,24 @@ class GroundTruthGenerator:
         with open(self.whitelist_path, 'r') as f:
             return [line.strip() for line in f if line.strip()]
 
-    def generate_ground_truth(self, threshold: int = 3) -> Dict[str, int]:
+    def generate_ground_truth(self, threshold: int = 3, force_regenerate: bool = False) -> Dict[str, int]:
         """
         Retorna dicionário {composto: ano_primeiro_reporte}.
+        Usa cache baseado no threshold para evitar reprocessamento.
         """
+        cache_file = self.cache_dir / f"ground_truth_t{threshold}.csv"
+
+        # 1. Tentar carregar do cache
+        if cache_file.exists() and not force_regenerate:
+            self.logger.info(f"Loading Ground Truth from cache: {cache_file}")
+            try:
+                df_cache = pd.read_csv(cache_file)
+                # Converter para dicionário: compound -> year
+                return dict(zip(df_cache['compound'], df_cache['year']))
+            except Exception as e:
+                self.logger.warning(f"Failed to load cache ({e}). Regenerating...")
+
+        # 2. Gerar do zero (Lógica pesada)
         self.logger.info("Generating Ground Truth (Year Reported) from corpus...")
         df = self._load_corpus()
         compounds = self._load_whitelist()
@@ -75,14 +91,10 @@ class GroundTruthGenerator:
         df['summary'] = df['summary'].astype(str)
         
         # Pre-filter: Keyword Context
-        # Otimização: Filtrar primeiro o contexto terapêutico geral antes de checar compostos
         mask_positive = df['summary'].str.contains(self.positive_regex)
         mask_negative = df['summary'].str.contains(self.negative_regex)
         
-        # Abstracts que têm keywords positivas E NÃO têm keywords negativas
         context_df = df[mask_positive & ~mask_negative].copy()
-        
-        # Filtrar pela doença
         context_df = context_df[context_df['summary'].str.contains(self.disease_regex)]
         
         if context_df.empty:
@@ -91,13 +103,9 @@ class GroundTruthGenerator:
 
         year_reported = {}
         
-        # Checar compostos
         for compound in tqdm(compounds, desc="Scanning compounds in corpus"):
             try:
-                # Regex seguro para o composto
                 compound_pat = r'\b' + re.escape(compound) + r'\b'
-                
-                # Contar ocorrências
                 counts = context_df['summary'].str.count(compound_pat, flags=re.IGNORECASE)
                 eligible = context_df[counts >= threshold]
                 
@@ -106,8 +114,17 @@ class GroundTruthGenerator:
                     year_reported[compound] = int(first_year)
             except Exception:
                 continue
-                
-        self.logger.info(f"Ground Truth generated: {len(year_reported)} compounds found in literature.")
+        
+        self.logger.info(f"Ground Truth generated: {len(year_reported)} compounds found.")
+
+        # 3. Salvar no cache
+        try:
+            df_out = pd.DataFrame(list(year_reported.items()), columns=['compound', 'year'])
+            df_out.to_csv(cache_file, index=False)
+            self.logger.info(f"Ground Truth saved to cache: {cache_file}")
+        except Exception as e:
+            self.logger.error(f"Could not save cache: {e}")
+
         return year_reported
 
 
@@ -165,30 +182,54 @@ class ModelEvaluator:
 
     def compute_metrics(self) -> float:
         """
-        Calcula a métrica 'Mean How Early' (Antecipação Média).
+        Calcula a métrica 'Mean How Early' e exibe estatísticas detalhadas.
         """
         recommendations = self._get_first_recommendations()
         
-        scores = []
+        data_for_stats = []
         hits = 0
         
         for compound, rec_year in recommendations.items():
             if compound in self.ground_truth:
                 report_year = self.ground_truth[compound]
-                
-                # Se o modelo recomendou ANTES ou NO MESMO ANO que foi reportado
-                # (Ou se quisermos penalizar atrasos, subtraímos direto)
-                # A lógica original era: how_early = report - recommend
-                
                 how_early = report_year - rec_year
-                scores.append(how_early)
+                
+                # Armazena tupla para o DataFrame
+                data_for_stats.append({
+                    'compound_name': compound,
+                    'how_early': how_early
+                })
                 hits += 1
 
-        if not scores:
+        if not data_for_stats:
             return 0.0
 
-        mean_early = sum(scores) / len(scores)
-        self.logger.info(f"Model '{self.model_subfolder}': {hits} hits, Mean Early Years: {mean_early:.2f}")
+        # Criar DataFrame para facilitar cálculos estatísticos
+        df = pd.DataFrame(data_for_stats)
+        
+        mean_early = df['how_early'].mean()
+        median_early = df['how_early'].median()
+        std_dev = df['how_early'].std() if len(df) > 1 else 0.0
+        mode = df['how_early'].mode().tolist()
+        
+        # Logar estatísticas gerais
+        self.logger.info(f"Model '{self.model_subfolder}': {hits} hits")
+        self.logger.info(f"  Mean: {mean_early:.2f} years")
+        self.logger.info(f"  Median: {median_early} years")
+        self.logger.info(f"  Std Dev: {std_dev:.2f} years")
+        self.logger.info(f"  Mode: {mode} years")
+
+        # Top 5 Maiores (Antecipações)
+        top_5_biggest = df.nlargest(5, 'how_early')
+        self.logger.info("  Top 5 Biggest Anticipations (Years):")
+        for _, row in top_5_biggest.iterrows():
+            self.logger.info(f"    {row['how_early']} years - {row['compound_name']}")
+
+        # Top 5 Menores (Atrasos)
+        top_5_smallest = df.nsmallest(5, 'how_early')
+        self.logger.info("  Top 5 Smallest (Delays/Reactive):")
+        for _, row in top_5_smallest.iterrows():
+            self.logger.info(f"    {row['how_early']} years - {row['compound_name']}")
         
         return mean_early
 

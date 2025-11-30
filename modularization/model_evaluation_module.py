@@ -57,8 +57,7 @@ class ModelEvaluator:
 
     def _calculate_final_performance(self) -> float:
         """
-        Calcula a métrica 'Mean Years Early' para o período de teste.
-        Reaproveita a lógica do ModelSelector mas focada no relatório final.
+        Calcula a métrica 'Mean Years Early' e gera estatísticas detalhadas.
         """
         self.logger.info("Generating Ground Truth for final evaluation...")
         gt_gen = GroundTruthGenerator(self.disease_name, self.logger)
@@ -71,13 +70,10 @@ class ModelEvaluator:
         # Encontrar primeira recomendação no período de teste
         first_recommendation = {}
         
-        # Iterar apenas sobre os anos de teste
         for year in range(self.test_start_year, self.test_end_year + 1):
             year_path = self.top_n_base_path / str(year)
-            if not year_path.exists(): 
-                continue
+            if not year_path.exists(): continue
                 
-            # Buscar arquivo de score (padrão top_*_score.csv)
             csv_files = list(year_path.glob("top_*_score.csv"))
             if not csv_files: continue
             
@@ -87,46 +83,57 @@ class ModelEvaluator:
                 
                 if col in df.columns:
                     for compound in df[col].values:
-                        # Só registra se for a primeira vez que vemos e se estiver no Ground Truth
                         if compound not in first_recommendation and compound in ground_truth:
                             first_recommendation[compound] = year
             except Exception as e:
                 self.logger.error(f"Error reading ranking file for year {year}: {e}")
 
-        # Calcular Score
-        scores = []
-        hits = 0
+        # Preparar dados
         details = []
-
         for compound, rec_year in first_recommendation.items():
             report_year = ground_truth[compound]
             how_early = report_year - rec_year
-            
-            scores.append(how_early)
-            hits += 1
             details.append((compound, rec_year, report_year, how_early))
 
-        if not scores:
+        if not details:
             self.logger.warning("No intersection between recommendations and ground truth in test period.")
             return 0.0
 
-        mean_early = sum(scores) / len(scores)
+        # Criar DataFrame
+        details_df = pd.DataFrame(details, columns=['compound', 'recommendation_year', 'literature_report_year', 'years_early'])
         
-        # Logar detalhes para auditoria
+        # Cálculos Estatísticos
+        mean_early = details_df['years_early'].mean()
+        median_early = details_df['years_early'].median()
+        std_dev = details_df['years_early'].std() if len(details_df) > 1 else 0.0
+        mode = details_df['years_early'].mode().tolist()
+        
+        # Logar Detalhes (Formato similar ao script antigo)
         self.logger.info(f"\n{'='*40}")
         self.logger.info(f"FINAL PERFORMANCE: {self.model_name}")
         self.logger.info(f"Test Period: {self.test_start_year}-{self.test_end_year}")
-        self.logger.info(f"Correct Hits: {hits}")
+        self.logger.info(f"Correct Hits: {len(details_df)}")
         self.logger.info(f"Mean Years Early: {mean_early:.2f}")
+        self.logger.info(f"Median: {median_early}")
+        self.logger.info(f"Std Dev: {std_dev:.2f}")
+        self.logger.info(f"Mode: {mode}")
+        
+        self.logger.info("\nTop 5 Biggest Anticipations:")
+        top_5_biggest = details_df.nlargest(5, 'years_early')
+        for _, row in top_5_biggest.iterrows():
+            self.logger.info(f"  {row['years_early']} years - {row['compound']}")
+
+        self.logger.info("\nTop 5 Smallest (Delays):")
+        top_5_smallest = details_df.nsmallest(5, 'years_early')
+        for _, row in top_5_smallest.iterrows():
+            self.logger.info(f"  {row['years_early']} years - {row['compound']}")
         self.logger.info(f"{'='*40}")
         
-        # Salvar CSV de validação final
-        details_df = pd.DataFrame(details, columns=['compound', 'recommendation_year', 'literature_report_year', 'years_early'])
-        details_df = details_df.sort_values('years_early', ascending=False)
+        # Salvar CSV
         output_csv = self.base_path / "reports" / "final_model_validation.csv"
         output_csv.parent.mkdir(parents=True, exist_ok=True)
         details_df.to_csv(output_csv, index=False)
-        self.logger.info(f"Validation details saved to {output_csv}")
+        self.logger.info(f"Full validation details saved to {output_csv}")
 
         return mean_early
 
