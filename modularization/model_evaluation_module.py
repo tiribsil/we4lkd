@@ -92,6 +92,8 @@ class ModelEvaluator:
         details = []
         for compound, rec_year in first_recommendation.items():
             report_year = ground_truth[compound]
+            if report_year < self.test_start_year:
+                continue
             how_early = report_year - rec_year
             details.append((compound, rec_year, report_year, how_early))
 

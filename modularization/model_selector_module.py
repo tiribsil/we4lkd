@@ -133,11 +133,12 @@ class ModelEvaluator:
     Calcula a score de um modelo comparando suas recomendações (top_n files)
     com o Ground Truth.
     """
-    def __init__(self, model_subfolder: str, ground_truth: Dict[str, int], base_path: Path, logger: logging.Logger):
+    def __init__(self, model_subfolder: str, ground_truth: Dict[str, int], base_path: Path, logger: logging.Logger, start_year: int, end_year: int):
         self.model_subfolder = model_subfolder
         self.ground_truth = ground_truth
         self.logger = logger
-        # Caminho onde o ValidationModule salva os rankings
+        self.start_year = start_year
+        self.end_year = end_year
         self.top_n_base_path = base_path / "validation" / model_subfolder / "top_n_compounds"
 
     def _get_first_recommendations(self) -> Dict[str, int]:
@@ -159,6 +160,9 @@ class ModelEvaluator:
         for year_path in year_dirs:
             year = int(year_path.name)
             
+            if not (self.start_year <= year <= self.end_year):
+                continue
+
             # Procurar arquivo CSV de score (ex: top_20_score.csv ou top_50_score.csv)
             csv_files = list(year_path.glob("top_*_score.csv"))
             if not csv_files:
@@ -187,11 +191,13 @@ class ModelEvaluator:
         recommendations = self._get_first_recommendations()
         
         data_for_stats = []
-        hits = 0
         
         for compound, rec_year in recommendations.items():
             if compound in self.ground_truth:
                 report_year = self.ground_truth[compound]
+                # Ignora se já foi reportado no passado
+                if report_year < self.start_year:
+                    continue
                 how_early = report_year - rec_year
                 
                 # Armazena tupla para o DataFrame
@@ -199,8 +205,7 @@ class ModelEvaluator:
                     'compound_name': compound,
                     'how_early': how_early
                 })
-                hits += 1
-
+        
         if not data_for_stats:
             return 0.0
 
@@ -213,7 +218,7 @@ class ModelEvaluator:
         mode = df['how_early'].mode().tolist()
         
         # Logar estatísticas gerais
-        self.logger.info(f"Model '{self.model_subfolder}': {hits} hits")
+        self.logger.info(f"Model '{self.model_subfolder}':")
         self.logger.info(f"  Mean: {mean_early:.2f} years")
         self.logger.info(f"  Median: {median_early} years")
         self.logger.info(f"  Std Dev: {std_dev:.2f} years")
@@ -307,12 +312,13 @@ class ModelSelector:
                 self.logger.error(f"Validation exception for {model_name}: {e}")
                 continue
 
-            # C) Avaliação (Score)
             evaluator = ModelEvaluator(
                 model_subfolder=model_name,
                 ground_truth=ground_truth,
                 base_path=self.base_path,
-                logger=self.logger
+                logger=self.logger,
+                start_year=self.start_year,
+                end_year=self.end_year
             )
             score = evaluator.compute_metrics()
             model_scores[model_name] = score
