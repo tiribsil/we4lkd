@@ -1,6 +1,7 @@
 import os
 import string
 import logging
+import json
 from pathlib import Path
 from functools import reduce
 from logging.handlers import RotatingFileHandler
@@ -64,6 +65,36 @@ class LoggerFactory:
 
 def normalize_disease_name(disease_name: str) -> str:
         return disease_name.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
+
+def _get_checkpoint_path(disease_name: str) -> Path:
+    return Path(f"artifacts/{disease_name}_pipeline_checkpoint.json")
+
+def _load_checkpoint(disease_name: str) -> dict:
+    checkpoint_path = _get_checkpoint_path(disease_name)
+    if checkpoint_path.exists():
+        with open(checkpoint_path, "r") as f:
+            return json.load(f)
+    return {
+        "disease_name": disease_name,
+        "last_expansion_year": None,
+        "phase_1_topic_expansion_completed": False,
+        "phase_2_data_collection_completed": False,
+        "phase_3_preprocessing_completed": False,
+        "phase_4_automl_training_completed": False,
+        "phase_5_metric_generation_completed": False,
+        "phase_6_model_selection_completed": False,
+        "phase_7_final_report_completed": False,
+        "model_dev_end_year": None,
+        "model_selection_end_year": None,
+        "trained_models_info": {},
+        "best_model_name": None
+    }
+
+def _save_checkpoint(disease_name: str, checkpoint_data: dict):
+    checkpoint_path = _get_checkpoint_path(disease_name)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(checkpoint_path, "w") as f:
+        json.dump(checkpoint_data, f, indent=4)
 
 @staticmethod
 def default_typo_corrections():

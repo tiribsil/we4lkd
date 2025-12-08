@@ -577,8 +577,7 @@ class Preprocessing:
             years_to_process = self._get_years_to_process()
         
         if not years_to_process:
-            self.logger.info("No new years to process. Using full processing mode.")
-            return self.clean_and_normalize()
+            return
         
         self.logger.info(f"Processing years: {years_to_process}")
         
@@ -611,22 +610,33 @@ class Preprocessing:
 
         temp_dir = self.clean_papers_path / "temp_clean_abstracts"
         
+        # Clean up previous temp dir if it exists
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
         # If the previous CSV exists, load and union it
-        self.logger.info(f"Appending new abstracts to existing CSV: {output_file}")
-        df_existing = self.spark.read.option("header", "true").csv(str(output_file))
-        df_combined = df_existing.unionByName(df_new_spark).dropDuplicates(subset=['summary'])
+        if output_file.exists():
+            self.logger.info(f"Appending new abstracts to existing CSV: {output_file}")
+            df_existing = self.spark.read.option("header", "true").csv(str(output_file))
+            df_combined = df_existing.unionByName(df_new_spark).dropDuplicates(subset=['summary'])
+        else:
+            self.logger.info(f"Creating new clean abstracts file: {output_file}")
+            df_combined = df_new_spark
         
         # Save to a temporary directory
         df_combined.coalesce(1).write.mode('overwrite').option("header", "true").csv(str(temp_dir))
         
-        # Mover e renomear part file para clean_abstracts.csv
-        part_file = list(temp_dir.glob("part-*.csv"))[0]
-        shutil.move(str(part_file), str(output_file))
-        
-        # Remover a pasta temporária
-        shutil.rmtree(temp_dir)
-        
-        self.logger.info(f'Incremental cleaning completed. Output: {output_file}')
+        # Find the part-file and move it, overwriting the old main file
+        try:
+            part_file = next(temp_dir.glob("part-*.csv"))
+            shutil.move(str(part_file), output_file)
+            self.logger.info(f'Incremental cleaning completed. Total abstracts: {df_combined.count()}. Output: {output_file}')
+        except StopIteration:
+            self.logger.error("Spark did not generate an output part-file for incremental update.")
+        finally:
+            # Remover a pasta temporária
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
 
     def clean_and_normalize(self):
         """Limpa e normaliza abstracts usando PySpark (modo full)."""
@@ -710,11 +720,26 @@ class Preprocessing:
         # Save
         self.logger.info('Saving clean abstracts with PySpark...')
         self.clean_papers_path.mkdir(parents=True, exist_ok=True)
-        output_file = str(Path(f'{self.clean_papers_path}/clean_abstracts.csv'))
-        
-        df_clean_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(output_file)
+        output_file = Path(f'{self.clean_papers_path}/clean_abstracts.csv')
+        temp_output_dir = Path(f'{self.clean_papers_path}/clean_abstracts_temp')
 
-        self.logger.info(f'Full cleaning completed. Saved {df_clean_spark.count()} clean abstracts to {output_file}')
+        # Clean up previous temp dir if it exists
+        if temp_output_dir.exists():
+            shutil.rmtree(temp_output_dir)
+
+        df_clean_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(str(temp_output_dir))
+
+        # Find the part-file and move it
+        try:
+            part_file = next(temp_output_dir.glob("part-*.csv"))
+            shutil.move(str(part_file), output_file)
+            self.logger.info(f'Full cleaning completed. Saved {df_clean_spark.count()} clean abstracts to {output_file}')
+        except StopIteration:
+            self.logger.error("Spark did not generate an output part-file. Saving failed.")
+        finally:
+            # Clean up the temporary directory
+            if temp_output_dir.exists():
+                shutil.rmtree(temp_output_dir)
 
         # Mark years as processed after a successful full run
         processed_years_in_full_run = set()

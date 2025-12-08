@@ -9,4 +9,7 @@ latent_knowledge_report_*.tex
 *__pycache__*
 nohup.out
 venv
-
+*.log
+logs/
+artifacts/
+glove/
