@@ -29,10 +29,7 @@ class CandidateModelTraining:
         
         self.model_combinations: Dict[str, List[Any]] = {}
         self.model_combinations.update({
-            "w2v_comb1": [200, 5, 2, 1, 15, 0.025, 15, 4], 
-            "w2v_comb2": [200, 10, 3, 0, 5, 0.03, 20, 4],  
-            "ft_comb1": [100, 5, 2, 1, 10, 0.025, 15, 4, 3, 6],   
-            "glove_comb1": [300, 8, 30, 0.05, 5, 100] 
+            "w2v_berto_et_al": [200, 5, 2, 1, 15, 0.025, 15, 4],
         })
 
         self.base_path = Path(f'./data/{self.disease_name}')
