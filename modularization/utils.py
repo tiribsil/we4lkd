@@ -84,6 +84,7 @@ def _load_checkpoint(disease_name: str) -> dict:
         "phase_5_metric_generation_completed": False,
         "phase_6_model_selection_completed": False,
         "phase_7_final_report_completed": False,
+        "phase_8_contextualization_completed": False,
         "model_dev_end_year": None,
         "model_selection_end_year": None,
         "trained_models_info": {},
