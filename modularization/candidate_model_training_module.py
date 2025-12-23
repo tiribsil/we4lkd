@@ -101,14 +101,17 @@ class CandidateModelTraining:
                 'negative': params[4], 
                 'alpha': params[5],
                 'epochs': params[6], 
-                'workers': params[7]
+                'workers': params[7],
+                'ns_exponent': params[8],
+                'sample': params[9]
             }
         elif architecture == 'ft':
             model_type = ModelType.FASTTEXT
             custom_params = {
                 'vector_size': params[0], 'window': params[1], 'min_count': params[2],
                 'sg': params[3], 'negative': params[4], 'alpha': params[5],
-                'epochs': params[6], 'workers': params[7], 'min_n': params[8], 'max_n': params[9]
+                'epochs': params[6], 'workers': params[7], 'min_n': params[8], 'max_n': params[9],
+                'ns_exponent': params[10], 'sample': params[11]
             }
         elif architecture == 'glove':
             model_type = ModelType.GLOVE
@@ -223,17 +226,18 @@ class CandidateModelTraining:
     def _dict_to_list_params(self, architecture: str, hp: Dict[str, Any]) -> List[Any]:
         """Converte o dicionário do LHS para a lista ordenada esperada pelo _create_config_from_params."""
         if architecture == 'w2v':
-            # Ordem: [vector_size, window, min_count, sg, negative, alpha, epochs, workers]
-            return [
-                hp['vector_size'], hp['window'], hp['min_count'], hp['sg'], 
-                hp['negative'], hp['alpha'], hp['epochs'], hp['workers']
-            ]
-        elif architecture == 'ft':
-            # Ordem: [vector_size, window, min_count, sg, negative, alpha, epochs, workers, min_n, max_n]
+            # Ordem: [vector_size, window, min_count, sg, negative, alpha, epochs, workers, ns_exponent, sample]
             return [
                 hp['vector_size'], hp['window'], hp['min_count'], hp['sg'], 
                 hp['negative'], hp['alpha'], hp['epochs'], hp['workers'],
-                hp['min_n'], hp['max_n']
+                hp['ns_exponent'], hp['sample']
+            ]
+        elif architecture == 'ft':
+            # Ordem: [vector_size, window, min_count, sg, negative, alpha, epochs, workers, min_n, max_n, ns_exponent, sample]
+            return [
+                hp['vector_size'], hp['window'], hp['min_count'], hp['sg'], 
+                hp['negative'], hp['alpha'], hp['epochs'], hp['workers'],
+                hp['min_n'], hp['max_n'], hp['ns_exponent'], hp['sample']
             ]
         elif architecture == 'glove':
             # Ordem: [vector_size, window, max_iter, learning_rate, min_count, x_max]
@@ -260,10 +264,11 @@ class CandidateModelTraining:
 
         # 2. Definição dos Espaços de Parâmetros
         w2v_specs = [
-            ('vector_size', 100, 300, 'int'), ('window', 2, 10, 'int'),
-            ('min_count', 1, 5, 'int'), ('sg', 0, 1, 'bin'),
-            ('negative', 5, 15, 'int'), ('alpha', 0.01, 0.05, 'float'),
-            ('epochs', 5, 30, 'int'), ('workers', 1, 4, 'int'),
+            ('vector_size', 100, 100, 'int'), ('window', 3, 10, 'int'),
+            ('min_count', 1, 5, 'int'), ('sg', 1, 1, 'int'), # Force SG
+            ('negative', 10, 20, 'int'), ('alpha', 0.01, 0.05, 'float'),
+            ('epochs', 50, 150, 'int'), ('workers', 4, 4, 'int'),
+            ('ns_exponent', -1.0, 0.5, 'float'), ('sample', 1e-5, 1e-3, 'float'),
         ]
 
         ft_specs = w2v_specs + [ # Herda specs do w2v e adiciona específicos

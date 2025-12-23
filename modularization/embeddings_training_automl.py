@@ -341,6 +341,8 @@ class Word2VecModel(BaseEmbeddingModel):
             'alpha': self.config.custom_params.get('alpha', 0.025),
             'epochs': self.config.custom_params.get('epochs', 15),
             'workers': self.config.custom_params.get('workers', 1),
+            'ns_exponent': self.config.custom_params.get('ns_exponent', 0.75),
+            'sample': self.config.custom_params.get('sample', 0.001),
         }
         self.model = Word2Vec(sentences=sentences, **params)
         self.logger.info(f"Word2Vec trained: {len(self.model.wv)} words")
@@ -375,6 +377,8 @@ class FastTextModel(BaseEmbeddingModel):
             'alpha': self.config.custom_params.get('alpha', 0.025),
             'epochs': self.config.custom_params.get('epochs', 15),
             'workers': self.config.custom_params.get('workers', 1),
+            'ns_exponent': self.config.custom_params.get('ns_exponent', 0.75),
+            'sample': self.config.custom_params.get('sample', 0.001),
             'min_n': self.config.custom_params.get('min_n', 3),
             'max_n': self.config.custom_params.get('max_n', 5),
         }

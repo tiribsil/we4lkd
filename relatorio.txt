@@ -123,3 +123,8 @@ Ideia da Luiza! Fazer os modelos serem incrementais, com a saída de um alimenta
 
 Modularizei os scripts e parametrizei pra poder mexer mais fácil depois. Tive problemas com a API do entrez mas foi só dividir em batches. Deixou MUITO lento então vou fazer threads. Backfeeding parece que começa a deixar o modelo pior depois de um tempo, preciso limitar o quanto a lista de tópicos aumenta.
 
+Nova pipeline: periodos separados para expansão, treinamento em lote, seleção e teste
+
+módulo de contextualização com biomistral
+
+objetivos: melhoria em modelos candidatos, refatoração e pipeline preliminar
