@@ -109,6 +109,23 @@ class ValidationModule:
         self.logger.info(f"Model Subfolder: {self.model_subfolder}")
         self._detect_available_models()
 
+    def _load_ground_truth(self) -> Dict[str, int]:
+        """
+        Carrega o Ground Truth (T3) para filtragem.
+        Retorna dicionário {composto: ano_primeiro_reporte}.
+        """
+        gt_path = self.base_path / "ground_truth_cache" / "ground_truth_t3.csv"
+        if not gt_path.exists():
+            self.logger.warning(f"Ground Truth file not found at {gt_path}. Filtering disabled.")
+            return {}
+        
+        try:
+            df = pd.read_csv(gt_path)
+            return dict(zip(df['compound'], df['year']))
+        except Exception as e:
+            self.logger.error(f"Error loading Ground Truth: {e}")
+            return {}
+
     def _detect_available_models(self) -> None:
         """
         Detecta modelos na subpasta especificada.
@@ -503,8 +520,16 @@ class ValidationModule:
             except Exception as e:
                 self.logger.error(f"Error reading {csv_file}: {e}")
 
+        # Carregar Ground Truth
+        ground_truth = self._load_ground_truth()
+        previously_recommended: Set[str] = set()
+        
+        # Ordenar anos para processamento cronológico
+        sorted_years = sorted(yearly_data.keys())
+
         # Processar e Salvar Rankings
-        for year, metrics_dict in yearly_data.items():
+        for year in sorted_years:
+            metrics_dict = yearly_data[year]
             year_dir = self.top_n_path / str(year)
             year_dir.mkdir(parents=True, exist_ok=True)
             
@@ -512,15 +537,40 @@ class ValidationModule:
                 # Ordenar
                 # Para distância euclidiana, menor é melhor. Para outros, maior é melhor.
                 reverse = (metric != 'euclidean_distance')
-                
-                # Ordena
                 values.sort(key=lambda x: x[0], reverse=reverse)
                 
-                # Pega Top N
-                top_items = values[:self.top_n_to_save]
+                filtered_top_n = []
                 
+                # Lógica de Filtragem Específica para 'score'
+                if metric == 'score':
+                    for val, name in values:
+                        # Para a lista se já atingiu o N desejado
+                        if len(filtered_top_n) >= self.top_n_to_save:
+                            break
+                            
+                        # Verificar Filtro GT
+                        should_filter = False
+                        
+                        if name in ground_truth:
+                            gt_year = ground_truth[name]
+                            # Se ano atual > ano reporte, candidato é "antigo"
+                            if year > gt_year:
+                                # Regra: Só filtrar se JÁ foi recomendado anteriormente por ESTE modelo
+                                if name in previously_recommended:
+                                    should_filter = True
+                        
+                        if not should_filter:
+                            filtered_top_n.append({'chemical_name': name, metric: val})
+                            # Atualiza conjunto de já recomendados
+                            previously_recommended.add(name)
+                
+                else:
+                    # Métricas convencionais: pega Top N direto
+                    top_items = values[:self.top_n_to_save]
+                    filtered_top_n = [{'chemical_name': name, metric: val} for val, name in top_items]
+
                 # Salva
-                out_df = pd.DataFrame([{'chemical_name': name, metric: val} for val, name in top_items])
+                out_df = pd.DataFrame(filtered_top_n)
                 out_file = year_dir / f'top_{self.top_n_to_save}_{metric}.csv'
                 out_df.to_csv(out_file, index=False)
                 

@@ -16,7 +16,7 @@ class IterativeTopicExpansion:
         self.normalized_disease_name = normalize_disease_name(disease_name)
         self.max_topics = max_topics
         self.max_new_topics = max_new_topics
-        self.logger = LoggerFactory.setup_logger("IterativeTopicExpansion", log_to_file=True, log_file='iterative_topic_expansion.log')
+        self.logger = LoggerFactory.setup_logger("IterativeTopicExpansion", log_to_file=True, log_file='logs/iterative_topic_expansion.log')
 
         self.base_path = Path('./data') / self.normalized_disease_name
         self.topics_file = self.base_path / 'topics_of_interest.txt'

@@ -18,7 +18,7 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
     if len(train_val_test_split) != 3:
         raise ValueError("The train_val_test_split list must have 3 values!")
 
-    logger = LoggerFactory.setup_logger("MainPipeline", log_to_file=True, log_file='main_pipeline.log')
+    logger = LoggerFactory.setup_logger("MainPipeline", log_to_file=True, log_file='logs/main_pipeline.log')
     logger.info(f"Starting full pipeline for disease: {disease_name}")
 
     normalized_disease_name = normalize_disease_name(disease_name)
