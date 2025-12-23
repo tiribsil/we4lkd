@@ -4,6 +4,7 @@ import re
 from llama_cpp import Llama
 from pathlib import Path
 from typing import List, Dict, Optional
+from huggingface_hub import hf_hub_download
 
 # Setup Instructions:
 # pip install llama-cpp-python
@@ -21,9 +22,21 @@ class ContextualizationModule:
         Args:
             n_ctx: Context size
         """
-        self.model_path = Path("./we4lkd/biomedical_models/BioMistral-7B.Q4_K_M.gguf")
+        self.model_path = Path("./biomedical_models/BioMistral-7B.Q4_K_M.gguf")
+        
         if not self.model_path.exists():
-            raise FileNotFoundError(f"Model not found: {self.model_path}")
+            print(f"Model not found at {self.model_path}. Downloading...")
+            try:
+                self.model_path.parent.mkdir(parents=True, exist_ok=True)
+                hf_hub_download(
+                    repo_id="QuantFactory/BioMistral-7B-GGUF",
+                    filename="BioMistral-7B.Q4_K_M.gguf",
+                    local_dir=str(self.model_path.parent),
+                    local_dir_use_symlinks=False
+                )
+                print(f"Model downloaded successfully to {self.model_path}")
+            except Exception as e:
+                raise RuntimeError(f"Failed to download model: {e}")
         
         self.llm = Llama(
             model_path=str(self.model_path),
@@ -36,18 +49,31 @@ class ContextualizationModule:
     
     def _create_prompt(self, compound: str) -> str:
         """Generate structured prompt optimized for BioMistral."""
-        return f"""[INST] You are a medical expert. Provide information about "{compound}" in the context of the disease "{self.disease}" in the following JSON format only. Do not include any other text.
+        return f"""[INST] <<SYS>>
+You are a medicinal chemist and clinical pharmacologist. Your task is to provide a neutral, evidence-based contextualization of a compound for a drug discovery pipeline. 
 
-                {{
-                  "compound_name": "string",
-                  "cas_registry_number": "CAS number or 'Unknown'",
-                  "pharmacological_class": "drug class",
-                  "primary_clinical_use": "main medical use",
-                  "mechanism_of_action_summary": "how it works",
-                  "relevance_to_disease": "explanation of relevance to the specified disease. Focus on the compound's role, benefits, and any specific considerations in treating {self.disease}.",
-                }}
+The pipeline has flagged "{compound}" as a potential candidate for "{self.disease}". This connection may be novel/theoretical or potentially non-existent. 
 
-                Respond with only the JSON object, nothing else. [/INST]"""
+**CRITICAL GUIDELINES:**
+1. DO NOT invent clinical evidence. If no known relationship exists, describe the theoretical biochemical rationale OR state that a connection is not biologically plausible.
+2. If the compound is clearly contraindicated, toxic, or irrelevant to the disease (e.g., a pesticide or a completely unrelated drug), explicitly state this in the 'rationale' field.
+3. Distinguish clearly between "Approved Use" and "Theoretical Hypothesis."
+<</SYS>>
+
+Provide information about "{compound}" regarding "{self.disease}" in the following JSON format only:
+
+{{
+  "compound_name": "string",
+  "cas_registry_number": "string",
+  "pharmacological_class": "e.g., Small molecule, Monoclonal antibody, etc.",
+  "primary_clinical_use": "Current FDA-approved or common research uses",
+  "mechanism_of_action_summary": "Biochemical pathway and molecular targets",
+  "theoretical_connection_to_disease": "Describe the potential biochemical or molecular rationale for why this might treat {self.disease}. If the connection is based on a specific pathway, name it.",
+  "plausibility_assessment": "Select one: [High / Moderate / Low / Speculative / Implausible]",
+  "safety_and_risks": "Briefly list major contraindications or reasons why this compound might be unsuitable for {self.disease}."
+}}
+
+Respond with only the JSON object. [/INST]"""
     
     def _extract_json(self, text: str) -> str:
         """Extract JSON from raw text output with multiple fallback strategies and attempt to fix truncated JSON."""

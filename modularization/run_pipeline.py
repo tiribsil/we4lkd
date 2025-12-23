@@ -1,5 +1,6 @@
 import datetime
 from pathlib import Path
+import pandas as pd
 
 from iterative_topic_expansion import IterativeTopicExpansion
 from data_collection_module import DataCollection
@@ -10,6 +11,7 @@ from dotproduct_generation_module import ValidationModule
 from model_selector_module import ModelSelector
 from model_evaluation_module import ModelEvaluator
 from latent_knowledge_report_module import LatentKnowledgeReportGenerator
+from contextualization_module import ContextualizationModule
 from utils import LoggerFactory, _load_checkpoint, _save_checkpoint, normalize_disease_name
 
 def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, train_val_test_split: list[float]):
@@ -242,6 +244,55 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
     else:
         logger.info(f"Skipping Step 7: Final Report Generation (completed in a previous run).")
 
+    # ===================================================================================
+    # PHASE 5: Contextualization
+    # ===================================================================================
+    logger.info("="*80)
+    logger.info("PHASE 5: Contextualization")
+    logger.info("="*80)
+
+    # Checkpoint 8: Contextualization
+    if not checkpoint_data.get("phase_8_contextualization_completed"):
+        logger.info(f"Running contextualization for the final year {test_end_year} using best model '{best_model}'...")
+        
+        # Path construction: data/{disease}/validation/{best_model}/top_n_compounds/{today_year}/top_{n}_score.csv
+        # Assuming n=20 as standard or derived from configuration
+        n = 20
+        top_compounds_csv = Path(f'./data/{normalized_disease_name}/validation/{best_model}/top_n_compounds/{test_end_year}/top_{n}_score.csv')
+        
+        if top_compounds_csv.exists():
+            try:
+                logger.info(f"Reading compounds from: {top_compounds_csv}")
+                df = pd.read_csv(top_compounds_csv)
+                
+                if 'chemical_name' in df.columns:
+                    compounds = df['chemical_name'].tolist()
+                    logger.info(f"Found {len(compounds)} compounds to analyze.")
+                    
+                    # Initialize module
+                    logger.info("Initializing BioMistral model...")
+                    context_module = ContextualizationModule(disease=disease_name)
+                    
+                    # Run analysis
+                    results = context_module.analyze_batch(compounds)
+                    
+                    # Export results
+                    output_file = Path(f'./data/{normalized_disease_name}/contextualization_results_{test_end_year}.json')
+                    context_module.export_json(results, str(output_file))
+                    
+                    checkpoint_data["phase_8_contextualization_completed"] = True
+                    _save_checkpoint(normalized_disease_name, checkpoint_data)
+                    
+                else:
+                    logger.error(f"Column 'chemical_name' not found in {top_compounds_csv}")
+                    
+            except Exception as e:
+                logger.error(f"Error during contextualization step: {e}")
+        else:
+            logger.warning(f"Top compounds file not found at {top_compounds_csv}. Skipping contextualization.")
+            
+    else:
+        logger.info(f"Skipping Step 8: Contextualization (completed in a previous run).")
 
     logger.info("="*80)
     logger.info("FULL PIPELINE FINISHED")

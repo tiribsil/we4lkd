@@ -13,3 +13,4 @@ venv
 logs/
 artifacts/
 glove/
+biomedical_models/
