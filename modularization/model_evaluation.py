@@ -3,11 +3,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import pandas as pd
 
-from candidate_model_training_module import CandidateModelTraining
-from dotproduct_generation_module import ValidationModule
-from latent_knowledge_report_module import LatentKnowledgeReportGenerator
-from model_selector_module import GroundTruthGenerator
-from utils import LoggerFactory, normalize_disease_name
+from embedding_training import CandidateModelTraining
+from metric_generation import ValidationModule
+from reporting import LatentKnowledgeReportGenerator
+from extract_report_years import GroundTruthGenerator
+from utils import get_logger, normalize_disease_name
 
 class ModelEvaluator:
     """
@@ -32,11 +32,7 @@ class ModelEvaluator:
         self.test_start_year = test_start_year
         self.test_end_year = test_end_year
         
-        self.logger = LoggerFactory.setup_logger(
-            "ModelEvaluator", 
-            log_to_file=True, 
-            log_file="model_evaluation.log"
-        )
+        self.logger = get_logger(self.__class__.__name__)
         
         self.base_path = Path(f"data/{self.normalized_disease_name}")
         self.top_n_base_path = self.base_path / "validation" / self.model_name / "top_n_compounds"

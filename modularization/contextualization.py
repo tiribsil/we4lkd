@@ -5,6 +5,7 @@ from llama_cpp import Llama
 from pathlib import Path
 from typing import List, Dict, Optional
 from huggingface_hub import hf_hub_download
+from utils import get_logger
 
 # Setup Instructions:
 # pip install llama-cpp-python
@@ -22,10 +23,11 @@ class ContextualizationModule:
         Args:
             n_ctx: Context size
         """
+        self.logger = get_logger(self.__class__.__name__)
         self.model_path = Path("./biomedical_models/BioMistral-7B.Q4_K_M.gguf")
         
         if not self.model_path.exists():
-            print(f"Model not found at {self.model_path}. Downloading...")
+            self.logger.info(f"Model not found at {self.model_path}. Downloading...")
             try:
                 self.model_path.parent.mkdir(parents=True, exist_ok=True)
                 hf_hub_download(
@@ -34,7 +36,7 @@ class ContextualizationModule:
                     local_dir=str(self.model_path.parent),
                     local_dir_use_symlinks=False
                 )
-                print(f"Model downloaded successfully to {self.model_path}")
+                self.logger.info(f"Model downloaded successfully to {self.model_path}")
             except Exception as e:
                 raise RuntimeError(f"Failed to download model: {e}")
         
@@ -199,8 +201,8 @@ Respond with only the JSON object. [/INST]"""
                 return result
                 
             except (json.JSONDecodeError, ValueError) as e:
-                print(f"   Warning: JSON parsing failed for {compound}")
-                print(f"   Raw output preview: {raw_text[:200]}")
+                self.logger.warning(f"JSON parsing failed for {compound}")
+                self.logger.debug(f"Raw output preview: {raw_text[:200]}")
                 return self._create_fallback_entry(compound, raw_text)
             
         except Exception as e:
@@ -223,20 +225,20 @@ Respond with only the JSON object. [/INST]"""
         results = []
         
         if verbose:
-            print(f"Starting analysis of {len(compounds)} compounds...")
+            self.logger.info(f"Starting analysis of {len(compounds)} compounds...")
         
         for i, compound in enumerate(compounds, 1):
             if verbose:
-                print(f"\n[{i}/{len(compounds)}] Processing: {compound}...")
+                self.logger.info(f"[{i}/{len(compounds)}] Processing: {compound}...")
             
             result = self.analyze_compound(compound)
             results.append(result)
             
             if verbose:
                 if "error" not in result:
-                    print(f"   ✓ Analysis completed successfully")
+                    self.logger.info(f"   ✓ Analysis completed successfully")
                 else:
-                    print(f"   ✗ Error: {result.get('error', 'Unknown error')}")
+                    self.logger.warning(f"   ✗ Error: {result.get('error', 'Unknown error')}")
         
         return results
     
@@ -256,7 +258,7 @@ Respond with only the JSON object. [/INST]"""
         if filepath:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(json_str)
-            print(f"\n✓ Results exported to: {filepath}")
+            self.logger.info(f"Results exported to: {filepath}")
         
         return json_str
 

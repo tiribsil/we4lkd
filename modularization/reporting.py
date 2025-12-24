@@ -7,7 +7,7 @@ from datetime import date
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
-from utils import *
+from utils import get_logger, normalize_disease_name, LoggerFactory
 
 try:
     import jinja2
@@ -38,7 +38,7 @@ class LatentKnowledgeReportGenerator:
         metrics_to_plot: Optional[List[str]] = None,
         ):
         
-        self.logger = LoggerFactory.setup_logger("report_generator", f"{model_subfolder}_{target_year}", log_to_file=True, log_file=f'logs/report_{target_year}.log')
+        self.logger = get_logger(self.__class__.__name__)
         
         self.disease_name = disease_name
         self.normalized_disease_name = normalize_disease_name(disease_name)

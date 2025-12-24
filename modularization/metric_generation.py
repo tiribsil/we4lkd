@@ -9,20 +9,17 @@ import numpy as np
 import pandas as pd
 from gensim.models import Word2Vec, FastText, KeyedVectors
 from functools import lru_cache
-from utils import *
+from utils import get_logger, normalize_disease_name
 import warnings
 import collections
+
+from embedding_training import ModelType
 
 # Tenta importar o cliente ChEMBL, mas não falha se não existir
 try:
     from chembl_webresource_client.new_client import new_client
 except ImportError:
     new_client = None
-
-class ModelType(Enum):
-    WORD2VEC = "word2vec"
-    FASTTEXT = "fasttext"
-    GLOVE = "glove"
 
 class ValidationModule:
     """
@@ -63,7 +60,7 @@ class ValidationModule:
             use_chembl: Se deve usar ChEMBL para whitelist
             top_n_to_save: Quantos compostos salvar nos arquivos de ranking
         """
-        self.logger = LoggerFactory.setup_logger("validation", f"{model_subfolder}_{end_year}", log_to_file=True, log_file=f'logs/{model_subfolder}_{end_year}.log')
+        self.logger = get_logger(self.__class__.__name__)
         warnings.filterwarnings("ignore", category=UserWarning)
         
         self.disease_name = normalize_disease_name(disease_name)
@@ -105,8 +102,7 @@ class ValidationModule:
         self._model_files_by_year = {} 
         self._chembl_client = None
         
-        self.logger.info(f"ValidationModule initialized for {self.disease_name}")
-        self.logger.info(f"Model Subfolder: {self.model_subfolder}")
+        self.logger.info(f"Validator init: {self.disease_name} ({self.model_subfolder})")
         self._detect_available_models()
 
     def _load_ground_truth(self) -> Dict[str, int]:
@@ -131,7 +127,7 @@ class ValidationModule:
         Detecta modelos na subpasta especificada.
         Espera padrão: nome_anoInic_anoFim.model (ex: w2v_fixed_1956_1967.model)
         """
-        self.logger.info(f"Detecting models in {self.model_directory}...")
+        self.logger.info(f"Detecting models in {self.model_subfolder}...")
         
         if not self.model_directory.exists():
             self.logger.error(f"Model directory does not exist: {self.model_directory}")
@@ -169,7 +165,7 @@ class ValidationModule:
         if not available_models:
             self.logger.warning("No models matching pattern found in directory!")
         else:
-            self.logger.info(f"Total models detected: {len(available_models)}")
+            self.logger.info(f"Models detected: {len(available_models)}")
 
     # ... [Métodos _get_chembl_client_safe, _load_chembl_drugs, _load_pubchem_data, get_therapeutic_compounds mantidos iguais] ...
     # (Omitindo para brevidade, assuma que são idênticos ao anterior, focando nas mudanças)
@@ -189,7 +185,7 @@ class ValidationModule:
         if not client:
             return set()
         
-        self.logger.info("Fetching 'Small molecule drugs' list from ChEMBL (refined search)...")
+        self.logger.info("Fetching ChEMBL drugs...")
         drug_names_set = set()
         
         try:
