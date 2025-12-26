@@ -1,17 +1,18 @@
-## Passo a passo do que acontece no módulo de coleta de dados (crawler) [INTERNO]
+## Passo a passo do que acontece no módulo de coleta de dados (data_collection) [INTERNO]
 
-É passada para a classe no nome da doença, primeiro e último ano a serem buscados. A pipeline começa com a função **run()**, que agrega todas as outras funções.
+Este módulo (Fase 2) realiza a extração massiva de dados do PubMed. Recebe o nome da doença e o ano alvo. A execução principal ocorre via **run()**.
 
-1. Primeiro é gerada uma query que será enviada para a API do PubMed.
-Nessa função ocorre:
-    - Criação de uma lista de tópicos de interesse a serem pesquisados nos artigos
-    - Expansão da query com a busca de sinônimos - é feita com o download de arquivos do PubChem, que possuem CID, o nome da doença e sinônimos para seus compostos, de forma filtrada. Assim, a lista de tópicos de interesse cresce com os sinônimos dos tópicos originais.
-    - Depois, com os tópicos, criamos subqueries para serem também buscadas na PubMed
+1. **Geração de Query**:
+   - Lê os tópicos expandidos na Fase 1.
+   - Constrói uma query complexa combinando o nome da doença com os tópicos de interesse e seus sinônimos (obtidos via tabelas da PubChem).
 
-2. Procuramos artigos relacionados com os tópicos encontrados e seus sinônimos no PubMed e salvamos seus ids para identificação única.
+2. **Busca e Download**:
+   - Utiliza as APIs `esearch` e `efetch` do NCBI para localizar e baixar abstracts de artigos publicados no ano especificado.
+   - Garante que apenas artigos com abstracts disponíveis sejam processados.
 
-3. - Caso seja a primeira execução (não temos corpus), é feita uma agregação total dos abstracts. É organizado de acordo com seu ano, seu título e seu conteúdo, depois agregado por ano **DE PUBLICAÇÃO**.
-   - Caso não seja a primeira execução e tenhamos um corpus inicial, recuperamos as informações apenas dos novos papers (identificados a partir de novos ids) e fazemos sua agregação da mesma forma (ano, seu título e seu conteúdo). Depois salvamos o paper e agregamos ao corpus anterior.
+3. **Armazenamento Bruto**:
+   - Salva cada abstract individualmente em `data/{disease}/corpus/raw_abstracts/{year}/`.
+   - Mantém um controle de IDs para evitar downloads duplicados em execuções incrementais.
 
-4. Também identificamos quais anos tiveram novos papers, ao buscar arquivos que foram recém-adicionados. Com isso, agregamos os abstracts de forma incremental apenas para os anos afetados, e processamos apenas o que precisa.
-
+4. **Gerenciamento de Corpus**:
+   - No final da coleta de um ano, agrupa os arquivos individuais em um formato consolidado para facilitar o processamento em larga escala (PySpark).

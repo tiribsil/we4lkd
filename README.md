@@ -35,66 +35,44 @@ The final output is an explainable report that provides context and evidence, he
 
 ## Key Features
 
--   **End-to-End Pipeline**: A fully automated, menu-driven script (`run_pipeline.py`) that executes all steps from data collection to final report generation.
--   **Dynamic Query Generation**: Uses a topics of interest file to generate PubMed queries about subjects of interest for latent knowledge discovery regarding the target disease. Starts out with only the target disease and may be expanded with the best scoring compounds from the first run. This results in possible treatment compounds being added to the queries in the second run, expanding the context from only target-disease-related to general.
+-   **Modular 5-Phase Pipeline**: A restructured, checkpointed pipeline (`modularization/main.py`) that organizes the workflow into discrete, logical stages.
+-   **Automated Topic Expansion**: Uses Iterative Topic Expansion to dynamically broaden the literature search based on discovery potential.
+-   **LHS-Driven Model Selection**: Explores the hyperparameter space (Word2Vec, FastText) using Latin Hypercube Sampling (LHS) to find the optimal architecture for a specific disease.
 -   **Year-Over-Year Analysis**: Trains NLP models on cumulative, year-by-year corpora to track the evolution of semantic relationships over decades.
--   **Domain-Specific NER**: Uses specialized biomedical NER models (`en_ner_bc5cdr_md`) to accurately identify chemical and drug entities within the text.
--   **Scalable Data Processing**: Employs PySpark for efficient cleaning, normalization, and preparation of large text corpora.
--   **Explainable AI (XAI)**: Generates natural language explanations for the top-ranked compound-disease relationships, citing co-occurrence contexts from the source texts to build a narrative.
--   **Automated Reporting**: Produces a detailed LaTeX report with historical plots and AI-generated insights, ready for researcher review.
+-   **Scalable Preprocessing**: Employs efficient cleaning and normalization, including a PubChem synonym mapping system.
+-   **Explainable AI (XAI)**: Uses LLMs (BioMistral/Mistral) to generate natural language hypotheses and contextualize the top-ranked compound-disease relationships.
+-   **Automated Reporting**: Produces a detailed LaTeX report with historical plots and metrics like "Mean Years Early" anticipation.
 
 ## The Pipeline: How It Works
 
-This project is structured as a sequential pipeline, in which each script performs a specific task and prepares data for the next step.
+The project is now divided into 5 main phases, orchestrated by `modularization/main.py`:
 
-1.  **`crawler.py` - PubMed Crawler**:
-    -   Takes a user-defined disease as input.
-    -   Uses a topics of interest file to fetch queries not only related to the disease, but everything else in it.
-    -   Fetches the IDs and abstracts of all relevant papers and saves them as individual text files.
+### Phase 1: Expansion (`topic_expansion.py`)
+Identifies relevant topics and expansion terms for the target disease using an iterative process. This ensures the corpus includes not just the disease itself, but its broader medical context.
 
-2.  **`merge_txt.py` - Corpus Aggregator**:
-    -   Merges the individual abstract files into cumulative, year-over-year corpus files. For example, the file for 1995 contains all abstracts from the start year up to and including 1995.
+### Phase 2: Development (`data_collection.py`, `preprocessing.py`, `embedding_training.py`)
+1.  **Data Collection**: Crawls PubMed for abstracts based on the expanded topics.
+2.  **Preprocessing**: Standardizes text, removes noise, and normalizes chemical names using PubChem synonyms.
+3.  **Candidate Training**: Trains a suite of candidate embedding models (Word2Vec/FastText) using various hyperparameter combinations selected via LHS.
 
-3.  **`ner_table_generator.py` - NER Table Generator**:
-    -   Processes the full corpus using a spaCy biomedical NER model.
-    -   Identifies all entities labeled as `CHEMICAL` and saves them to a `ner_table.csv` for later use in normalization.
+### Phase 3: Selection (`model_selection.py`)
+Evaluates all candidate models against a "Ground Truth" (historical discovery years extracted from the corpus in `ground_truth.py`). It selects the model architecture that best "predicts" known discoveries before they were officially reported.
 
-4.  **`clean_summaries.py` - Text Preprocessing**:
-    -   A PySpark job that performs heavy-duty text cleaning.
-    -   It normalizes text, removes stopwords, and crucially, uses a PubChem synonym database and the NER table to replace compound synonyms with a canonical name.
-    -   Outputs a single `clean_abstracts.csv` file.
+### Phase 4: Evaluation (`model_evaluation.py`, `reporting.py`)
+Perform a final, rigorous assessment of the best model. It executes incremental training and generates:
+-   Historical similarity rankings.
+-   Anticipation metrics (how many years early the model would have predicted treatments).
+-   A complete LaTeX/PDF report with visualizations.
 
-5.  **`train_yoy.py` - Year-Over-Year Model Training**:
-    -   Iterates through each year of the study period.
-    -   For each year, it trains a Word2Vec (or FastText) model on the corresponding cumulative corpus of cleaned abstracts.
-
-6.  **`generate_dotproducts_csv.py` - Relationship Scoring**:
-    -   Loads each year-over-year model.
-    -   Calculates the dot product (a proxy for semantic similarity) between the vector for the target disease and the vectors for all chemical compounds present in corpus.
-    -   Saves the historical scores for each compound in a separate CSV file.
-
-7.  **`latent_knowledge_report.py` - Report Data Generation**:
-    -   Analyzes the historical score data for all compounds.
-    -   For each year, it ranks the compounds based on their relationship score with the disease and saves the top compounds to a file.
-    -   This step prepares the data necessary for generating reports and visualizations, but no longer generates a PDF report itself.
-
-8.  **`get_best_treatment_candidates.py` - Identify Top Candidates**:
-    -   Reads the analysis results from the final year.
-    -   Identifies the top 10 compounds based on the final 'score' metric.
-    -   Saves this list of potential treatments to `potential_treatments.txt` for easy review.
-
-9.  **`xai.py` - AI-Powered Explanation**:
-    -   For the top-ranked compounds, it extracts sentences from the corpus where the compound and the disease co-occur.
-    -   It feeds these "evidence sentences" to the Google Gemini API (temporary?) and prompts it to formulate a hypothesis explaining the potential connection, creating the XAI layer.
+### Phase 5: Summary (`contextualization.py`)
+The final XAI layer. It takes the top-ranked candidates for the current year and uses an LLM to build scientific hypotheses, citing potential mechanisms of action discovered in its knowledge base.
 
 ## Getting Started
-
-Follow these instructions to set up and run the project locally.
-
 ### Prerequisites
 
--   Python 3.9+
--   A virtual environment tool (`venv`, `conda`, etc.)
+-   Python 3.10+
+-   `requirements.txt` dependencies (pandas, gensim, spacy, etc.)
+-   `en_ner_bc5cdr_md` spacy model.
 
 ### Installation
 
@@ -104,91 +82,58 @@ Follow these instructions to set up and run the project locally.
     cd we4lkd
     ```
 
-2.  **Create and activate a virtual environment:**
+2.  **Setup Environment:**
     ```sh
-    # For Linux/macOS
     python3 -m venv venv
     source venv/bin/activate
-
-    # For Windows
-    python -m venv venv
-    .\venv\Scripts\activate
-    ```
-
-3.  **Install the required Python packages:**
-    ```sh
     pip install -r requirements.txt
-    ```
-
-4.  **Download the spaCy model:**
-    This project is optimized for the biomedical NER model.
-    ```sh
     python -m spacy download en_ner_bc5cdr_md
     ```
 
-5.  **Download Titles and Filtered-Synonyms tables from PubMed:**
-
-    Put them in /data/pubmed_data/
-    
-    https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/.
-
 ## Usage
 
-The entire pipeline is orchestrated by the `run_pipeline.py` script, which runs an automated, year-over-year analysis.
+The pipeline is now centered in the `modularization` directory.
 
-1.  **Set the Target Disease:**
-    Before running, you must specify the disease you want to analyze in the `target_disease.txt` file.
+1.  **Set the Target Disease**:
+    Specify the disease in `target_disease.txt` (root).
     ```
     acute myeloid leukemia
     ```
 
-2.  **Run the main script:**
+2.  **Configure `.env`**:
+    Provide your API keys and paths if necessary in the `.env` file.
+
+3.  **Run the Pipeline**:
+    The main entry point is `modularization/main.py`.
     ```sh
-    python run_pipeline.py
+    python modularization/main.py
     ```
 
-3.  **Automated Execution:**
-    The script will automatically execute the entire pipeline in an iterative loop, starting from a configured year (e.g., 1970) up to the current year. For each year, it performs all steps from crawling to analysis.
-
-4.  **Feedback Loop:**
-    A key feature of the new pipeline is the automated feedback loop. After each full iteration (i.e., after processing a year), the script identifies the top treatment candidates and can automatically add them to the `topics_of_interest.txt` file. This allows the crawler to broaden its search in subsequent iterations, creating a powerful discovery cycle.
+4.  **Checkpoints**:
+    The pipeline saves its state in `artifacts/`. If interrupted, it will resume from the last successful phase.
 
 ## Project Structure
 
 ```
 .
-├── data/
-│   ├── {disease_name}/              # All data for a specific disease
-│   │   ├── corpus/
-│   │   │   ├── raw_abstracts/       # Step 1: Individual crawled abstracts
-│   │   │   ├── aggregated_abstracts/  # Step 2: Cumulative yearly files
-│   │   │   ├── ner_table.csv        # Step 3: NER results
-│   │   │   └── clean_abstracts/     # Step 4: Cleaned, normalized abstracts
-│   │   ├── models/                  # Step 5: Year-over-year Word2Vec/FastText models
-│   │   └── validation/
-│   │       ├── {model_type}/
-│   │       │   ├── compound_history/  # Step 6: Historical dot product scores
-│   │       │   ├── top_n_compounds/ # Step 7: Top compounds per year
-│   │       │   └── xai/             # Step 9: AI-generated explanations
-│   │       └── reports/               # Step 7: Final LaTeX/PDF reports
-│   └── pubchem_data/                # Static data for synonym normalization
-├── src/
-|   ├── crawler.py
-|   ├── merge_txt.py
-|   ├── ner_table_generator.py
-|   ├── clean_summaries.py
-|   ├── train_yoy.py
-|   ├── generate_dotproducts_csv.py
-|   ├── latent_knowledge_report.py
-|   ├── get_best_treatment_candidates.py
-|   ├── xai.py
-│   └── utils.py                     # Utility functions
-├── api_key.py                       # (User-created, temporary?) Google API Key
-├── latent_knowledge_template.tex    # Template for the final report
-├── README.md
-├── requirements.txt
-├── run_pipeline.py                  # Main execution script
-└── target_disease.txt               # (User-created) Target disease name
+├── modularization/          # Core Logic
+│   ├── main.py              # Pipeline Entry Point
+│   ├── topic_expansion.py   # Phase 1: Topic crawler/expander
+│   ├── data_collection.py   # Phase 2: PubMed crawler
+│   ├── preprocessing.py     # Phase 2: Text cleaning & normalization
+│   ├── embedding_training.py# Phase 2: Model training (merged)
+│   ├── metric_generation.py # Phase 2: Similarity metrics
+│   ├── model_selection.py   # Phase 3: Selection Logic
+│   ├── model_evaluation.py  # Phase 4: Final Evaluation
+│   ├── reporting.py         # Phase 4: LaTeX Report Generator
+│   ├── ground_truth.py      # Shared Logic: Literature-based discovery years
+│   ├── contextualization.py # Phase 5: LLM Hypotheses
+│   └── utils.py             # Logging and helpers
+├── data/                    # Generated data and corpora
+├── artifacts/               # Checkpoints
+├── logs/                    # Pipeline execution logs
+├── requirements.txt         # Dependencies
+└── README.md
 ```
 
 ## Contributing
