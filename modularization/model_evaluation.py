@@ -22,7 +22,8 @@ class ModelEvaluator:
         model_name: str, 
         corpus_start_year: int, 
         test_start_year: int, 
-        test_end_year: int
+        test_end_year: int,
+        ground_truth: Optional[Dict[str, int]] = None
     ):
         self.disease_name = disease_name
         self.normalized_disease_name = normalize_disease_name(disease_name)
@@ -31,6 +32,7 @@ class ModelEvaluator:
         self.corpus_start_year = corpus_start_year
         self.test_start_year = test_start_year
         self.test_end_year = test_end_year
+        self.ground_truth = ground_truth
         
         self.logger = get_logger(self.__class__.__name__)
         
@@ -51,13 +53,20 @@ class ModelEvaluator:
         else:
             raise ValueError(f"Model '{self.model_name}' not found in defined combinations.")
 
+    def compute_metrics(self) -> float:
+        """Alias para _calculate_final_performance, usado pelo ModelSelector."""
+        return self._calculate_final_performance()
+
     def _calculate_final_performance(self) -> float:
         """
         Calcula a métrica 'Mean Years Early' e gera estatísticas detalhadas.
         """
-        self.logger.info("Generating Ground Truth for final evaluation...")
-        gt_gen = GroundTruthGenerator(self.disease_name, self.logger)
-        ground_truth = gt_gen.generate_ground_truth(threshold=3)
+        if self.ground_truth:
+            ground_truth = self.ground_truth
+        else:
+            self.logger.info("Generating Ground Truth for evaluation...")
+            gt_gen = GroundTruthGenerator(self.disease_name, self.logger)
+            ground_truth = gt_gen.generate_ground_truth(threshold=3)
         
         if not ground_truth:
             self.logger.warning("No ground truth generated. Score will be 0.")
@@ -107,21 +116,20 @@ class ModelEvaluator:
         mode = details_df['years_early'].mode().tolist()
         
         # Logar Detalhes (Formato similar ao script antigo)
-        self.logger.info(f"\n{'='*40}")
-        self.logger.info(f"FINAL PERFORMANCE: {self.model_name}")
-        self.logger.info(f"Test Period: {self.test_start_year}-{self.test_end_year}")
-        self.logger.info(f"Correct Hits: {len(details_df)}")
-        self.logger.info(f"Mean Years Early: {mean_early:.2f}")
-        self.logger.info(f"Median: {median_early}")
-        self.logger.info(f"Std Dev: {std_dev:.2f}")
-        self.logger.info(f"Mode: {mode}")
+        self.logger.info(f"{'='*40}")
+        self.logger.info(f"Model: {self.model_name}")
+        self.logger.info(f"  Test Period: {self.test_start_year}-{self.test_end_year}")
+        self.logger.info(f"  Anticipation Mean: {mean_early:.2f}")
+        self.logger.info(f"  Anticipation Median: {median_early}")
+        self.logger.info(f"  Anticipation Std Dev: {std_dev:.2f}")
+        self.logger.info(f"  Anticipation Mode: {mode}")
         
-        self.logger.info("\nTop 5 Biggest Anticipations:")
+        self.logger.info("Top 5 Biggest Anticipations:")
         top_5_biggest = details_df.nlargest(5, 'years_early')
         for _, row in top_5_biggest.iterrows():
             self.logger.info(f"  {row['years_early']} years - {row['compound']}")
 
-        self.logger.info("\nTop 5 Smallest (Delays):")
+        self.logger.info("Top 5 Smallest (Delays):")
         top_5_smallest = details_df.nsmallest(5, 'years_early')
         for _, row in top_5_smallest.iterrows():
             self.logger.info(f"  {row['years_early']} years - {row['compound']}")

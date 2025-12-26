@@ -88,12 +88,12 @@ class ModelSelector:
                 continue
 
             evaluator = ModelEvaluator(
-                model_subfolder=model_name,
-                ground_truth=ground_truth,
-                base_path=self.base_path,
-                logger=self.logger,
-                start_year=self.start_year,
-                end_year=self.end_year
+                disease_name=self.disease_name,
+                model_name=model_name,
+                corpus_start_year=self.corpus_start_year,
+                test_start_year=self.start_year,
+                test_end_year=self.end_year,
+                ground_truth=ground_truth
             )
             score = evaluator.compute_metrics()
             model_scores[model_name] = score
