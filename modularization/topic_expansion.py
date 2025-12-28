@@ -1,13 +1,13 @@
-import os
 from pathlib import Path
-import time, datetime
+import time
+import datetime
 
-from data_collection_module import DataCollection
-from preprocessing_module import Preprocessing
-from fixed_embedding_training import FixedEmbeddingTraining
-from dotproduct_generation_module import ValidationModule
-from latent_knowledge_report_module import LatentKnowledgeReportGenerator
-from utils import LoggerFactory, normalize_disease_name
+from data_collection import DataCollection
+from preprocessing import Preprocessing
+from embedding_training import CandidateModelTraining
+from metric_generation import ValidationModule
+from reporting import LatentKnowledgeReportGenerator
+from utils import get_logger, normalize_disease_name
 
 
 class IterativeTopicExpansion:
@@ -16,7 +16,7 @@ class IterativeTopicExpansion:
         self.normalized_disease_name = normalize_disease_name(disease_name)
         self.max_topics = max_topics
         self.max_new_topics = max_new_topics
-        self.logger = LoggerFactory.setup_logger("IterativeTopicExpansion", log_to_file=True, log_file='iterative_topic_expansion.log')
+        self.logger = get_logger(self.__class__.__name__)
 
         self.base_path = Path('./data') / self.normalized_disease_name
         self.topics_file = self.base_path / 'topics_of_interest.txt'
@@ -30,17 +30,17 @@ class IterativeTopicExpansion:
         return len(topics)
 
     def run(self):
-        self.logger.info("Starting iterative topic expansion process.")
+        self.logger.info(">>> Phase 1: Expansion")
 
         # Ensure topics_of_interest.txt is initialized with disease name if empty
         if not self.topics_file.exists() or self._get_current_topics_count() == 0:
             self.topics_file.parent.mkdir(parents=True, exist_ok=True)
             self.topics_file.write_text(self.disease_name + '\n', encoding='utf-8')
-            self.logger.info(f"Initialized topics_of_interest.txt with '{self.disease_name}'.")
+            self.logger.info(f"Init topics: '{self.disease_name}'")
 
 
 
-        self.logger.info("Determining start year based on topics...")
+        self.logger.info("Finding start year...")
         # We need a temporary DC instance just to get the start year
         temp_dc_for_year_finding = DataCollection(self.disease_name, target_year=datetime.datetime.now().year) # Year is irrelevant here
         start_year = temp_dc_for_year_finding.get_first_publication_year()
@@ -49,23 +49,19 @@ class IterativeTopicExpansion:
             start_year = 1950 # Default fallback year
             self.logger.warning(f"Could not determine start year dynamically. Defaulting to {start_year}.")
         else:
-            self.logger.info(f"Dynamically determined start year: {start_year}")
+            self.logger.info(f"Start year: {start_year}")
 
 
-        self.logger.info("Starting iterative topic expansion process.")
-        self.logger.info(f"Start year: {start_year}")
-        self.logger.info(f"Max topics to reach: {self.max_topics}")
-        self.logger.info(f"Max new topics per iteration: {self.max_new_topics}")
+        self.logger.info(f"Params: start={start_year}, target={self.max_topics}")
 
         iteration = 1
         current_year = start_year
         while self._get_current_topics_count() < self.max_topics:
-            self.logger.info(f"{'='*20} Iteration: {iteration} | Year: {current_year} {'='*20}")
-            current_topics = self._get_current_topics_count()
-            self.logger.info(f"Current number of topics: {current_topics}")
+            self.logger.info(f"--- Iter {iteration} ({current_year}) ---")
+            self.logger.info(f"Topics: {self._get_current_topics_count()}")
 
             # 1. Data Collection
-            self.logger.info(f"Running Data Collection module for year {current_year}...")
+            self.logger.info(f"Collecting {current_year}...")
             data_collection = DataCollection(
                 disease_name=self.disease_name,
                 target_year=current_year,
@@ -73,10 +69,10 @@ class IterativeTopicExpansion:
                 filter_synonyms=True
             )
             data_collection.run()
-            self.logger.info("Data Collection complete.")
+            self.logger.info("Data collected.")
 
             # 2. Preprocessing
-            self.logger.info("Running Preprocessing module...")
+            self.logger.info("Preprocessing...")
             preprocessing = Preprocessing(
                 target_year=current_year,
                 disease_name=self.disease_name,
@@ -87,16 +83,21 @@ class IterativeTopicExpansion:
                 iteration += 1
                 current_year += 1
                 continue
-            self.logger.info("Preprocessing complete.")
+            self.logger.info("Preprocessing done.")
 
             # 3. Fixed Embedding Training (Cumulative)
-            self.logger.info("Running Fixed Embedding Training module...")
-            embedding_trainer = FixedEmbeddingTraining(
+            # 3. Fixed Embedding Training (Cumulative)
+            self.logger.info("Training...")
+            # [vector_size, window, min_count, sg, negative, alpha, epochs, workers, ns_exponent, sample]
+            fixed_params = [200, 5, 2, 1, 15, 0.025, 15, 4, 0.75, 0.001]
+            
+            trainer = CandidateModelTraining(
                 disease_name=self.disease_name,
                 start_year=start_year,
                 end_year=current_year
             )
-            if not embedding_trainer.run():
+            # Use 'w2v_fixed' as model name so it maps to 'w2v' architecture and saves in 'w2v_fixed' folder
+            if not trainer.train_specific_model("w2v_fixed", fixed_params, current_year):
                 self.logger.error("Embedding training failed. Skipping.")
                 iteration += 1
                 current_year += 1

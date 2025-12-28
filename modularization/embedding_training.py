@@ -1,17 +1,254 @@
 import os
+import gc
+import itertools
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-import pandas as pd
-from gensim.models import Word2Vec, FastText, KeyedVectors
-import numpy as np
-import shutil
-from scipy.stats import qmc
+from typing import List, Dict, Optional, Tuple, Any
+from dataclasses import dataclass, field
+from enum import Enum
 import concurrent.futures
-import os
 
-from utils import LoggerFactory, normalize_disease_name
+import numpy as np
+import pandas as pd
+from scipy.stats import qmc
+from gensim.models import KeyedVectors, Word2Vec, FastText
+from sklearn.decomposition import PCA
+from mittens import Mittens, GloVe
 
-from embeddings_training_automl import ModelType, EmbeddingConfig, ModelFactory, GloVeModel as MittensGloVeModel
+from utils import get_logger, normalize_disease_name
+
+
+class ModelType(Enum):
+    """Supported embedding model types."""
+    WORD2VEC = "word2vec"
+    FASTTEXT = "fasttext"
+    GLOVE = "glove"
+
+
+@dataclass
+class EmbeddingConfig:
+    """Configuration for embedding models."""
+    model_type: ModelType
+    use_pca: bool = False
+    pca_components: Optional[int] = None
+    vector_size: int = 300
+    custom_params: Dict[str, Any] = field(default_factory=dict)
+    end_year: int = None
+
+
+class BaseEmbeddingModel:
+    """Base class for embedding models."""
+    
+    def __init__(self, config: EmbeddingConfig):
+        self.config = config
+        self.model = None
+        self.pca = None
+        self.end_year = self.config.end_year
+        self.logger = get_logger(self.__class__.__name__)
+    
+    def train(self, sentences: List[List[str]]) -> None:
+        raise NotImplementedError
+    
+    def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
+        raise NotImplementedError
+    
+    def apply_pca(self, embeddings: np.ndarray) -> np.ndarray:
+        """Apply PCA reduction if configured."""
+        if not self.config.use_pca or embeddings.shape[0] == 0:
+            return embeddings
+        
+        n_components = self.config.pca_components or min(50, embeddings.shape[1] // 2)
+        n_components = min(n_components, embeddings.shape[0], embeddings.shape[1])
+        
+        if self.pca is None:
+            self.pca = PCA(n_components=n_components, random_state=42)
+            reduced = self.pca.fit_transform(embeddings)
+        else:
+            reduced = self.pca.transform(embeddings)
+        
+        self.logger.info(f"PCA: {embeddings.shape[1]} → {reduced.shape[1]} dims")
+        return reduced
+
+
+class Word2VecModel(BaseEmbeddingModel):
+    """Word2Vec embedding model."""
+    
+    def train(self, sentences: List[List[str]]) -> None:
+        params = {
+            'vector_size': self.config.vector_size,
+            'window': self.config.custom_params.get('window', 5),
+            'min_count': self.config.custom_params.get('min_count', 2),
+            'sg': self.config.custom_params.get('sg', 1),
+            'negative': self.config.custom_params.get('negative', 10),
+            'alpha': self.config.custom_params.get('alpha', 0.025),
+            'epochs': self.config.custom_params.get('epochs', 15),
+            'workers': self.config.custom_params.get('workers', 1),
+            'ns_exponent': self.config.custom_params.get('ns_exponent', 0.75),
+            'sample': self.config.custom_params.get('sample', 0.001),
+        }
+        self.model = Word2Vec(sentences=sentences, **params)
+        self.logger.info(f"Word2Vec trained: {len(self.model.wv)} words")
+    
+    def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
+        if sentences:
+            embeddings = []
+            for sentence in sentences:
+                words = sentence.lower().split()
+                vectors = [self.model.wv[w] for w in words if w in self.model.wv]
+                if vectors:
+                    embeddings.append(np.mean(vectors, axis=0))
+                else:
+                    embeddings.append(np.zeros(self.config.vector_size))
+            embeddings = np.array(embeddings)
+        else:
+            embeddings = self.model.wv.vectors
+        
+        return self.apply_pca(embeddings)
+
+
+class FastTextModel(BaseEmbeddingModel):
+    """FastText embedding model."""
+    
+    def train(self, sentences: List[List[str]]) -> None:
+        params = {
+            'vector_size': self.config.vector_size,
+            'window': self.config.custom_params.get('window', 5),
+            'min_count': self.config.custom_params.get('min_count', 2),
+            'sg': self.config.custom_params.get('sg', 1),
+            'negative': self.config.custom_params.get('negative', 10),
+            'alpha': self.config.custom_params.get('alpha', 0.025),
+            'epochs': self.config.custom_params.get('epochs', 15),
+            'workers': self.config.custom_params.get('workers', 1),
+            'ns_exponent': self.config.custom_params.get('ns_exponent', 0.75),
+            'sample': self.config.custom_params.get('sample', 0.001),
+            'min_n': self.config.custom_params.get('min_n', 3),
+            'max_n': self.config.custom_params.get('max_n', 5),
+        }
+        self.model = FastText(sentences=sentences, **params)
+        self.logger.info(f"FastText trained: {len(self.model.wv)} words")
+    
+    def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
+        if sentences:
+            embeddings = []
+            for sentence in sentences:
+                words = sentence.lower().split()
+                vectors = [self.model.wv[w] for w in words if w in self.model.wv]
+                if vectors:
+                    embeddings.append(np.mean(vectors, axis=0))
+                else:
+                    embeddings.append(np.zeros(self.config.vector_size))
+            embeddings = np.array(embeddings)
+        else:
+            embeddings = self.model.wv.vectors
+        
+        return self.apply_pca(embeddings)
+
+
+class GloVeModel(BaseEmbeddingModel):
+    """GloVe embedding model trained from scratch using Mittens."""
+
+    def train(self, sentences: List[List[str]]) -> None:
+        # Expected hyperparameters for GloVe training:
+        # [vector_size, window, max_iter, learning_rate, min_count, x_max]
+        params = {
+            'vector_size': self.config.vector_size,
+            'window': self.config.custom_params.get('window', 5),
+            'min_count': self.config.custom_params.get('min_count', 2),
+            'max_iter': self.config.custom_params.get('max_iter', 15),
+            'alpha': self.config.custom_params.get('alpha', 0.05),
+            'learning_rate': self.config.custom_params.get('learning_rate', 0.05),
+            'x_max': self.config.custom_params.get('x_max', 100),
+        }
+
+        self.logger.info(f"Training GloVe model with Mittens using params: {params}")
+
+        # 1. Create Corpus for GloVe and build co-occurrence matrix
+        all_words = list(itertools.chain.from_iterable(sentences))
+        vocab = {word: i for i, word in enumerate(sorted(set(all_words)))} # Ensure consistent vocabulary order
+
+        # Filter vocabulary by min_count
+        word_counts = pd.Series(all_words).value_counts()
+        filtered_vocab_list = word_counts[word_counts >= params['min_count']].index.tolist()
+        filtered_vocab = {word: i for i, word in enumerate(sorted(filtered_vocab_list))}
+
+        if not filtered_vocab:
+            self.logger.warning("No words left after min_count filtering for GloVe. Skipping training.")
+            self.model = None
+            self.word_vectors_keyed_vectors = KeyedVectors(vector_size=params['vector_size'])
+            return
+
+        # Mittens expects raw sentences (list of lists of words)
+        cooc_model = GloVe(params['window'])
+        cooc_matrix = cooc_model.build_cooccurrence_matrix(sentences, vocabulary=filtered_vocab, min_count=params['min_count'])
+        
+        # 2. Initialize and train Mittens model
+        mittens_model = Mittens(
+            n=params['vector_size'],
+            max_iter=params['max_iter'],
+            eta=params['learning_rate'],
+            alpha=params['alpha'],
+            max_count=params['x_max'],
+        )
+
+        # Train the model
+        mittens_model.fit(cooc_matrix)
+
+        # 3. Store word vectors in Gensim KeyedVectors format for compatibility
+        self.model = mittens_model
+        self.vocabulary = list(filtered_vocab.keys())
+        self.word_vectors_keyed_vectors = KeyedVectors(vector_size=params['vector_size'])
+
+        # Add vectors to KeyedVectors object
+        for i, word in enumerate(self.vocabulary):
+            self.word_vectors_keyed_vectors.add_vector(word, mittens_model.get_embedding(word))
+        
+        self.logger.info(f"GloVe trained: {len(self.vocabulary)} words, {len(mittens_model.get_vectors())} embeddings")
+
+        # Clean up large objects
+        del cooc_matrix
+        del all_words
+        del vocab
+        del word_counts
+        del filtered_vocab
+        gc.collect()
+
+    def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
+        if self.model is None or self.word_vectors_keyed_vectors is None:
+            return np.array([])
+
+        if sentences:
+            embeddings = []
+            for sentence in sentences:
+                words = sentence.lower().split()
+                vectors = [self.word_vectors_keyed_vectors[w] 
+                           for w in words if w in self.word_vectors_keyed_vectors.key_to_index]
+                if vectors:
+                    embeddings.append(np.mean(vectors, axis=0))
+                else:
+                    embeddings.append(np.zeros(self.config.vector_size))
+            embeddings = np.array(embeddings)
+        else:
+            embeddings = self.word_vectors_keyed_vectors.vectors
+        
+        return self.apply_pca(embeddings)
+
+
+class ModelFactory:
+    """Factory for creating embedding models."""
+    
+    @staticmethod
+    def create_model(config: EmbeddingConfig) -> BaseEmbeddingModel:
+        model_map = {
+            ModelType.WORD2VEC: Word2VecModel,
+            ModelType.FASTTEXT: FastTextModel,
+            ModelType.GLOVE: GloVeModel,
+        }
+        
+        model_class = model_map.get(config.model_type)
+        if not model_class:
+            raise ValueError(f"Unknown model type: {config.model_type}")
+        
+        return model_class(config)
+
 
 class CandidateModelTraining:
     def __init__(
@@ -20,16 +257,14 @@ class CandidateModelTraining:
         start_year: int,
         end_year: int,
     ):
-        self.logger = LoggerFactory.setup_logger(
-            "candidate_model_training", target_year=str(start_year), log_to_file=False
-        )
+        self.logger = get_logger(self.__class__.__name__)
         self.disease_name = normalize_disease_name(disease_name)
         self.start_year = start_year
         self.end_year = end_year
         
         self.model_combinations: Dict[str, List[Any]] = {}
         self.model_combinations.update({
-            "w2v_berto_et_al": [200, 5, 2, 1, 15, 0.025, 15, 4],
+            "w2v_berto_et_al": [200, 5, 2, 1, 15, 0.025, 15, 4, 0.75, 0.001],
         })
 
         self.base_path = Path(f'./data/{self.disease_name}')
@@ -101,14 +336,17 @@ class CandidateModelTraining:
                 'negative': params[4], 
                 'alpha': params[5],
                 'epochs': params[6], 
-                'workers': params[7]
+                'workers': params[7],
+                'ns_exponent': params[8],
+                'sample': params[9]
             }
         elif architecture == 'ft':
             model_type = ModelType.FASTTEXT
             custom_params = {
                 'vector_size': params[0], 'window': params[1], 'min_count': params[2],
                 'sg': params[3], 'negative': params[4], 'alpha': params[5],
-                'epochs': params[6], 'workers': params[7], 'min_n': params[8], 'max_n': params[9]
+                'epochs': params[6], 'workers': params[7], 'min_n': params[8], 'max_n': params[9],
+                'ns_exponent': params[10], 'sample': params[11]
             }
         elif architecture == 'glove':
             model_type = ModelType.GLOVE
@@ -141,13 +379,13 @@ class CandidateModelTraining:
         model_path = model_output_dir / model_filename
         
         if model_path.exists():
-            self.logger.info(f"Model {model_filename} already exists. Skipping training.")
+            self.logger.info(f"Model exists: {model_filename}")
             return True
 
         # Preparar dados
         sentences = self._prepare_sentences(self.start_year, target_year)
         if not sentences:
-            self.logger.error(f"No data found for {self.start_year}-{target_year}")
+            self.logger.error(f"No data: {self.start_year}-{target_year}")
             return False
 
         # Configurar e Treinar
@@ -157,7 +395,7 @@ class CandidateModelTraining:
             return False
 
         try:
-            self.logger.info(f"Training {model_name} up to {target_year}...")
+            self.logger.info(f"Training {model_name} ({target_year})")
             model_instance = ModelFactory.create_model(config)
             model_instance.train(sentences)
             
@@ -177,7 +415,7 @@ class CandidateModelTraining:
 
         if hasattr(model_instance.model, 'save'):
             model_instance.model.save(str(model_path))
-        elif isinstance(model_instance, MittensGloVeModel):
+        elif isinstance(model_instance, GloVeModel):
              if model_instance.word_vectors_keyed_vectors:
                 model_instance.word_vectors_keyed_vectors.save_word2vec_format(str(model_path), binary=True)
         elif isinstance(model_instance.model, KeyedVectors):
@@ -187,9 +425,8 @@ class CandidateModelTraining:
             with open(model_path, 'wb') as f:
                 pickle.dump(model_instance.model, f)
         
-        self.logger.info(f"Saved: {model_path}")
+        self.logger.info(f"Saved: {model_filename}")
 
-    # Inseridas: funções LHS e run como métodos da classe (substituem as versões globais)
     def _scale_and_cast(self, sample: np.ndarray, low: float, high: float, dtype: str):
         """Scale sample in [0,1) to [low, high] and cast according to dtype ('int'|'float'|'bin')."""
         val = low + sample * (high - low)
@@ -223,17 +460,18 @@ class CandidateModelTraining:
     def _dict_to_list_params(self, architecture: str, hp: Dict[str, Any]) -> List[Any]:
         """Converte o dicionário do LHS para a lista ordenada esperada pelo _create_config_from_params."""
         if architecture == 'w2v':
-            # Ordem: [vector_size, window, min_count, sg, negative, alpha, epochs, workers]
-            return [
-                hp['vector_size'], hp['window'], hp['min_count'], hp['sg'], 
-                hp['negative'], hp['alpha'], hp['epochs'], hp['workers']
-            ]
-        elif architecture == 'ft':
-            # Ordem: [vector_size, window, min_count, sg, negative, alpha, epochs, workers, min_n, max_n]
+            # Ordem: [vector_size, window, min_count, sg, negative, alpha, epochs, workers, ns_exponent, sample]
             return [
                 hp['vector_size'], hp['window'], hp['min_count'], hp['sg'], 
                 hp['negative'], hp['alpha'], hp['epochs'], hp['workers'],
-                hp['min_n'], hp['max_n']
+                hp['ns_exponent'], hp['sample']
+            ]
+        elif architecture == 'ft':
+            # Ordem: [vector_size, window, min_count, sg, negative, alpha, epochs, workers, min_n, max_n, ns_exponent, sample]
+            return [
+                hp['vector_size'], hp['window'], hp['min_count'], hp['sg'], 
+                hp['negative'], hp['alpha'], hp['epochs'], hp['workers'],
+                hp['min_n'], hp['max_n'], hp['ns_exponent'], hp['sample']
             ]
         elif architecture == 'glove':
             # Ordem: [vector_size, window, max_iter, learning_rate, min_count, x_max]
@@ -260,10 +498,11 @@ class CandidateModelTraining:
 
         # 2. Definição dos Espaços de Parâmetros
         w2v_specs = [
-            ('vector_size', 100, 300, 'int'), ('window', 2, 10, 'int'),
-            ('min_count', 1, 5, 'int'), ('sg', 0, 1, 'bin'),
-            ('negative', 5, 15, 'int'), ('alpha', 0.01, 0.05, 'float'),
-            ('epochs', 5, 30, 'int'), ('workers', 1, 4, 'int'),
+            ('vector_size', 100, 100, 'int'), ('window', 3, 10, 'int'),
+            ('min_count', 1, 5, 'int'), ('sg', 1, 1, 'int'), # Force SG
+            ('negative', 10, 20, 'int'), ('alpha', 0.01, 0.05, 'float'),
+            ('epochs', 50, 150, 'int'), ('workers', 4, 4, 'int'),
+            ('ns_exponent', -1.0, 0.5, 'float'), ('sample', 1e-5, 1e-3, 'float'),
         ]
 
         ft_specs = w2v_specs + [ # Herda specs do w2v e adiciona específicos
@@ -339,10 +578,3 @@ class CandidateModelTraining:
                     self.logger.warning(f"Failed task: {key}")
 
         return self.model_combinations
-
-if __name__ == '__main__':
-    # Teste
-    t = CandidateModelTraining("acute myeloid leukemia", 1990, 2000)
-    # Exemplo de treino específico
-    #t.train_specific_model("w2v_test", [100, 5, 2, 1, 5, 0.025, 5, 4], 1995)
-    trained_models = t.run(sentences, trained_models)

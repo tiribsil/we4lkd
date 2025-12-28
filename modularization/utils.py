@@ -6,61 +6,97 @@ from pathlib import Path
 from functools import reduce
 from logging.handlers import RotatingFileHandler
 
-class TargetYearFilter(logging.Filter):
-    def __init__(self, target_year: str = None):
-        super().__init__()
-        self.target_year = target_year
+class CompactFormatter(logging.Formatter):
+    """Custom formatter for ultra-compact logs."""
+    _NAME_MAP = {
+        "CandidateModelTraining": "MDev",
+        "ModelSelector": "Selector",
+        "DataCollection": "DC",
+        "Preprocessing": "PP",
+        "ValidationModule": "Validator",
+        "IterativeTopicExpansion": "Expansion",
+        "ModelEvaluator": "Evaluator",
+        "ContextualizationModule": "Context",
+        "GroundTruthGenerator": "GT",
+        "LatentKnowledgeReportGenerator": "Reporter"
+    }
 
-    def filter(self, record):
-        record.target_year = self.target_year
-        return True
+    def __init__(self):
+        super().__init__("%(asctime)s | %(levelname).1s | %(name)s: %(message)s", datefmt="%m-%d %H:%M")
 
-
-class OptionalTargetYearFormatter(logging.Formatter):
     def format(self, record):
-        if getattr(record, "target_year", None):
-            self._style._fmt = "%(asctime)s - %(name)s - %(target_year)s - %(levelname)s - %(message)s"
-        else:
-            self._style._fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        # Strip the 'modularization.' prefix and apply mapping
+        name = record.name
+        if name.startswith("modularization."):
+            name = name[len("modularization."):]
+        
+        # Apply name mapping for brevity
+        record.name = self._NAME_MAP.get(name, name)
+        
+        if record.name == "modularization":
+            record.name = "root"
+            
         return super().format(record)
 
 
 class LoggerFactory:
+    """Centralized logging factory for the project."""
+    
+    _CONFIGURED = False
+
     @staticmethod
-    def setup_logger(
-        name: str = "logger",
-        target_year: str = None,
+    def setup(
         log_level: int = logging.INFO,
         log_to_file: bool = False,
-        log_file: str = "app.log",
-        max_bytes: int = 5 * 1024 * 1024,
-        backup_count: int = 3,
-    ) -> logging.Logger:
+        log_file: str = "logs/pipeline.log",
+        max_bytes: int = 10 * 1024 * 1024,
+        backup_count: int = 5,
+    ):
+        """Configure the root logger for the 'modularization' hierarchy."""
+        root_logger = logging.getLogger("modularization")
+        
+        if LoggerFactory._CONFIGURED:
+            return root_logger
+            
+        root_logger.setLevel(log_level)
+        formatter = CompactFormatter()
 
-        logger = logging.getLogger(name)
-        # Clear existing handlers to allow for reconfiguration
-        if logger.hasHandlers():
-            logger.handlers.clear()
+        if root_logger.hasHandlers():
+            root_logger.handlers.clear()
 
-        logger.setLevel(log_level)
-
-        formatter = OptionalTargetYearFormatter()
-
+        # Console
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
-        console_handler.addFilter(TargetYearFilter(target_year))
-        logger.addHandler(console_handler)
+        root_logger.addHandler(console_handler)
 
+        # File
         if log_to_file:
             os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
             file_handler = RotatingFileHandler(
                 log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
             )
             file_handler.setFormatter(formatter)
-            file_handler.addFilter(TargetYearFilter(target_year))
-            logger.addHandler(file_handler)
+            root_logger.addHandler(file_handler)
 
-        return logger
+        LoggerFactory._CONFIGURED = True
+        root_logger.info("Logging initialized")
+        return root_logger
+
+    @staticmethod
+    def get_logger(name: str) -> logging.Logger:
+        """Get a logger within the project hierarchy."""
+        # Ensure name starts with modularization if it doesn't
+        if not name.startswith("modularization"):
+            if name == "__main__":
+                name = "modularization.main"
+            else:
+                name = f"modularization.{name}"
+        return logging.getLogger(name)
+
+
+def get_logger(name: str) -> logging.Logger:
+    """Utility helper to get a project logger."""
+    return LoggerFactory.get_logger(name)
 
 
 def normalize_disease_name(disease_name: str) -> str:

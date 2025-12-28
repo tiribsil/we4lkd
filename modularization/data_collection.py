@@ -17,7 +17,7 @@ class DataCollection:
     def __init__(self, disease_name: str, target_year: int, max_workers: int = 4, 
                  expand_synonyms: bool = False, filter_synonyms: bool = True):
         load_dotenv()
-        self.logger = LoggerFactory.setup_logger("data_collection", target_year=str(target_year), log_to_file=True,log_file=f'logs/{target_year}.log')
+        self.logger = get_logger(self.__class__.__name__)
         self.disease_name = self.normalize_disease_name(disease_name)
         self.target_year = target_year
         self.retmax_papers = 9998  # Máximo permitido pelo NCBI
@@ -49,16 +49,16 @@ class DataCollection:
         Finds the earliest publication year using a binary search algorithm for each topic.
         This is efficient and robust against PubMed API limitations like sort order and retstart.
         """
-        self.logger.info("Determining the first publication year from topics of interest using binary search...")
+        self.logger.info("Finding start year (binary search)...")
         topics = self.list_from_file(self.topics_file)
         if not topics:
-            self.logger.warning("Topics of interest file is empty. Cannot determine start year.")
+            self.logger.warning("No topics! Cannot find start year.")
             return None
 
         oldest_year_overall = None
         
         for topic in topics:
-            self.logger.info(f"Binary searching for earliest publication for topic: '{topic}'")
+            self.logger.info(f"Topic '{topic}'...")
             
             low = 1500  # A safe lower bound for PubMed/MEDLINE articles
             high = datetime.now().year
@@ -94,12 +94,11 @@ class DataCollection:
                     break
             
             if earliest_year_for_topic:
-                self.logger.info(f"Earliest year found for topic '{topic}': {earliest_year_for_topic}")
-                if oldest_year_overall is None or earliest_year_for_topic < oldest_year_overall:
-                    oldest_year_overall = earliest_year_for_topic
-                    self.logger.info(f"Updated overall oldest year to {oldest_year_overall}.")
+                self.logger.info(f"Found {earliest_year_for_topic} for '{topic}'")
+                oldest_year_overall = earliest_year_for_topic
+                self.logger.info(f"Oldest year: {oldest_year_overall}")
             else:
-                 self.logger.warning(f"Could not find any articles for topic '{topic}'.")
+                self.logger.warning(f"Could not find any articles for topic '{topic}'.")
 
         return oldest_year_overall
 

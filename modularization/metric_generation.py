@@ -9,20 +9,17 @@ import numpy as np
 import pandas as pd
 from gensim.models import Word2Vec, FastText, KeyedVectors
 from functools import lru_cache
-from utils import *
+from utils import get_logger, normalize_disease_name
 import warnings
 import collections
+
+from embedding_training import ModelType
 
 # Tenta importar o cliente ChEMBL, mas não falha se não existir
 try:
     from chembl_webresource_client.new_client import new_client
 except ImportError:
     new_client = None
-
-class ModelType(Enum):
-    WORD2VEC = "word2vec"
-    FASTTEXT = "fasttext"
-    GLOVE = "glove"
 
 class ValidationModule:
     """
@@ -63,7 +60,7 @@ class ValidationModule:
             use_chembl: Se deve usar ChEMBL para whitelist
             top_n_to_save: Quantos compostos salvar nos arquivos de ranking
         """
-        self.logger = LoggerFactory.setup_logger("validation", f"{model_subfolder}_{end_year}", log_to_file=True, log_file=f'logs/{model_subfolder}_{end_year}.log')
+        self.logger = get_logger(self.__class__.__name__)
         warnings.filterwarnings("ignore", category=UserWarning)
         
         self.disease_name = normalize_disease_name(disease_name)
@@ -105,16 +102,32 @@ class ValidationModule:
         self._model_files_by_year = {} 
         self._chembl_client = None
         
-        self.logger.info(f"ValidationModule initialized for {self.disease_name}")
-        self.logger.info(f"Model Subfolder: {self.model_subfolder}")
+        self.logger.info(f"Validator init: {self.disease_name} ({self.model_subfolder})")
         self._detect_available_models()
+
+    def _load_ground_truth(self) -> Dict[str, int]:
+        """
+        Carrega o Ground Truth (T3) para filtragem.
+        Retorna dicionário {composto: ano_primeiro_reporte}.
+        """
+        gt_path = self.base_path / "ground_truth_cache" / "ground_truth_t3.csv"
+        if not gt_path.exists():
+            self.logger.warning(f"Ground Truth file not found at {gt_path}. Filtering disabled.")
+            return {}
+        
+        try:
+            df = pd.read_csv(gt_path)
+            return dict(zip(df['compound'], df['year']))
+        except Exception as e:
+            self.logger.error(f"Error loading Ground Truth: {e}")
+            return {}
 
     def _detect_available_models(self) -> None:
         """
         Detecta modelos na subpasta especificada.
         Espera padrão: nome_anoInic_anoFim.model (ex: w2v_fixed_1956_1967.model)
         """
-        self.logger.info(f"Detecting models in {self.model_directory}...")
+        self.logger.info(f"Detecting models in {self.model_subfolder}...")
         
         if not self.model_directory.exists():
             self.logger.error(f"Model directory does not exist: {self.model_directory}")
@@ -152,7 +165,7 @@ class ValidationModule:
         if not available_models:
             self.logger.warning("No models matching pattern found in directory!")
         else:
-            self.logger.info(f"Total models detected: {len(available_models)}")
+            self.logger.info(f"Models detected: {len(available_models)}")
 
     # ... [Métodos _get_chembl_client_safe, _load_chembl_drugs, _load_pubchem_data, get_therapeutic_compounds mantidos iguais] ...
     # (Omitindo para brevidade, assuma que são idênticos ao anterior, focando nas mudanças)
@@ -172,7 +185,7 @@ class ValidationModule:
         if not client:
             return set()
         
-        self.logger.info("Fetching 'Small molecule drugs' list from ChEMBL (refined search)...")
+        self.logger.info("Fetching ChEMBL drugs...")
         drug_names_set = set()
         
         try:
@@ -503,8 +516,16 @@ class ValidationModule:
             except Exception as e:
                 self.logger.error(f"Error reading {csv_file}: {e}")
 
+        # Carregar Ground Truth
+        ground_truth = self._load_ground_truth()
+        previously_recommended: Set[str] = set()
+        
+        # Ordenar anos para processamento cronológico
+        sorted_years = sorted(yearly_data.keys())
+
         # Processar e Salvar Rankings
-        for year, metrics_dict in yearly_data.items():
+        for year in sorted_years:
+            metrics_dict = yearly_data[year]
             year_dir = self.top_n_path / str(year)
             year_dir.mkdir(parents=True, exist_ok=True)
             
@@ -512,15 +533,40 @@ class ValidationModule:
                 # Ordenar
                 # Para distância euclidiana, menor é melhor. Para outros, maior é melhor.
                 reverse = (metric != 'euclidean_distance')
-                
-                # Ordena
                 values.sort(key=lambda x: x[0], reverse=reverse)
                 
-                # Pega Top N
-                top_items = values[:self.top_n_to_save]
+                filtered_top_n = []
                 
+                # Lógica de Filtragem Específica para 'score'
+                if metric == 'score':
+                    for val, name in values:
+                        # Para a lista se já atingiu o N desejado
+                        if len(filtered_top_n) >= self.top_n_to_save:
+                            break
+                            
+                        # Verificar Filtro GT
+                        should_filter = False
+                        
+                        if name in ground_truth:
+                            gt_year = ground_truth[name]
+                            # Se ano atual > ano reporte, candidato é "antigo"
+                            if year > gt_year:
+                                # Regra: Só filtrar se JÁ foi recomendado anteriormente por ESTE modelo
+                                if name in previously_recommended:
+                                    should_filter = True
+                        
+                        if not should_filter:
+                            filtered_top_n.append({'chemical_name': name, metric: val})
+                            # Atualiza conjunto de já recomendados
+                            previously_recommended.add(name)
+                
+                else:
+                    # Métricas convencionais: pega Top N direto
+                    top_items = values[:self.top_n_to_save]
+                    filtered_top_n = [{'chemical_name': name, metric: val} for val, name in top_items]
+
                 # Salva
-                out_df = pd.DataFrame([{'chemical_name': name, metric: val} for val, name in top_items])
+                out_df = pd.DataFrame(filtered_top_n)
                 out_file = year_dir / f'top_{self.top_n_to_save}_{metric}.csv'
                 out_df.to_csv(out_file, index=False)
                 
