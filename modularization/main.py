@@ -216,7 +216,7 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
         #
         # --------------------------------------------------------------------------------
         
-        me.run(generate_latex=True)
+        me.run()
         
         logger.info("Final report generation complete.")
         checkpoint_data["phase_7_final_report_completed"] = True

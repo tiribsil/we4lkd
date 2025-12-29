@@ -195,7 +195,7 @@ class PreliminaryPipeline:
                 test_start_year, 
                 test_end_year
             )
-            me.run(generate_latex=True)
+            me.run()
             self.checkpoint_data["phase_7_final_report_completed"] = True
             _save_checkpoint(self.normalized_disease_name, self.checkpoint_data)
         else:
