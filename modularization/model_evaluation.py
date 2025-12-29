@@ -143,7 +143,7 @@ class ModelEvaluator:
 
         return mean_early
 
-    def run(self, generate_latex: bool = True) -> bool:
+    def run(self) -> bool:
         """
         Executa o pipeline de avaliação final.
         """
@@ -182,18 +182,18 @@ class ModelEvaluator:
             self.logger.info("--- Step 3: Calculating Final Performance ---")
             self._calculate_final_performance()
 
-            # 5. Geração do Relatório LaTeX
-            if generate_latex:
-                self.logger.info("--- Step 4: Generating LaTeX Report ---")
-                # O ReportGenerator vai pegar os dados gerados pelo ValidationModule
-                # e criar os gráficos e o PDF.
-                reporter = LatentKnowledgeReportGenerator(
-                    disease_name=self.disease_name,
-                    model_subfolder=self.model_name,
-                    target_year=self.test_end_year, # Foca o relatório no último ano
-                    top_n_to_plot=15
-                )
-                reporter.run()
+            # 5. Geração do Relatório Visual
+            self.logger.info("--- Step 4: Generating Visual Report ---")
+            # O ReportGenerator vai pegar os dados gerados pelo ValidationModule
+            # e criar os gráficos (incluindo a trajetória PCA).
+            reporter = LatentKnowledgeReportGenerator(
+                disease_name=self.disease_name,
+                model_subfolder=self.model_name,
+                start_year=self.test_start_year,
+                target_year=self.test_end_year, # Foca o relatório no último ano
+                top_n_to_plot=15
+            )
+            reporter.run()
 
             self.logger.info("=== Final Evaluation Completed Successfully ===")
             return True
@@ -211,4 +211,4 @@ if __name__ == "__main__":
         test_start_year=2021,
         test_end_year=2024
     )
-    evaluator.run(generate_latex=True)
+    evaluator.run()

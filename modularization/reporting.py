@@ -9,13 +9,12 @@ import numpy as np
 from matplotlib import pyplot as plt
 from utils import get_logger, normalize_disease_name, LoggerFactory
 
-try:
-    import jinja2
-    JINJA2_AVAILABLE = True
-except ImportError:
-    JINJA2_AVAILABLE = False
-    print("Warning: jinja2 not available. LaTeX report will not be generated.")
-
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+from gensim.models import Word2Vec, KeyedVectors
+from sklearn.decomposition import PCA
+from utils import get_logger, normalize_disease_name, LoggerFactory
 
 class LatentKnowledgeReportGenerator:
     """
@@ -33,6 +32,7 @@ class LatentKnowledgeReportGenerator:
         self,
         disease_name: str,
         model_subfolder: str, # Ex: "w2v_fixed"
+        start_year: int,      # Ano inicial do período de teste
         target_year: int,     # Ano foco do relatório (geralmente o último)
         top_n_to_plot: int = 10,
         metrics_to_plot: Optional[List[str]] = None,
@@ -43,6 +43,7 @@ class LatentKnowledgeReportGenerator:
         self.disease_name = disease_name
         self.normalized_disease_name = normalize_disease_name(disease_name)
         self.model_subfolder = model_subfolder
+        self.start_year = start_year
         self.target_year = target_year
         self.top_n_to_plot = top_n_to_plot
         self.metrics_to_plot = metrics_to_plot or self.DEFAULT_METRICS
@@ -56,6 +57,7 @@ class LatentKnowledgeReportGenerator:
         self.validation_path = self.base_path / 'validation' / self.model_subfolder
         self.top_n_path = self.validation_path / 'top_n_compounds'
         self.history_path = self.validation_path / 'compound_history'
+        self.model_directory = Path(f'{self.base_path}/models/{self.model_subfolder}')
         
         self.reports_path = self.base_path / 'reports'
         self.plots_path = self.base_path / 'plots' / self.model_subfolder
@@ -233,76 +235,152 @@ class LatentKnowledgeReportGenerator:
 
         return plots_data
 
-    def generate_latex_report(self, plots_status: Dict[str, str]) -> Optional[Path]:
-        """Gera o arquivo .tex"""
-        if not JINJA2_AVAILABLE: return None
+    def _load_model(self, year: int) -> Optional[object]:
+        """Loads the model for a specific year."""
+        # Pattern: *_{start_year}_{year}.model
+        pattern = re.compile(rf'.*_(\d+)_{year}\.model$')
+        if not self.model_directory.exists():
+            return None
+            
+        for model_file in self.model_directory.glob('*.model'):
+            if pattern.match(model_file.name):
+                try:
+                    return Word2Vec.load(str(model_file))
+                except Exception:
+                    try:
+                        return KeyedVectors.load(str(model_file))
+                    except Exception:
+                        self.logger.error(f"Failed to load model {model_file}")
+        return None
+
+    def generate_pca_trajectory_plot(self):
+        """
+        Gera um gráfico PCA 2D mostrando a trajetória da doença e dos compostos recomendados.
+        """
+        self.logger.info("Generating PCA trajectory plot...")
+        # 1. Obter top compostos recomendados para o ano alvo (por 'score')
+        top_compounds_data = self._get_top_compounds_from_file('score', self.target_year)
+        if not top_compounds_data:
+            self.logger.warning("No top compounds found for PCA plot.")
+            return
         
-        template_path = self.data_root / 'latent_knowledge_template.tex'
-        if not template_path.exists():
-            self.logger.warning("Template not found.")
-            return None
+        compounds = [name for _, name in top_compounds_data]
+        
+        # 2. Coletar embeddings para cada ano no período [start_year, target_year]
+        years = range(self.start_year, self.target_year + 1)
+        all_embeddings = [] # Lista de (year, label, vector)
+        pca_input_vectors = []
+        
+        for year in years:
+            model = self._load_model(year)
+            if not model:
+                continue
             
-        try:
-            latex_jinja_env = jinja2.Environment(
-                block_start_string='\\BLOCK{',
-                block_end_string='}',
-                variable_start_string='\\VAR{',
-                variable_end_string='}',
-                comment_start_string='\\#{',
-                comment_end_string='}',
-                loader=jinja2.FileSystemLoader(str(self.data_root))
-            )
-            template = latex_jinja_env.get_template('latent_knowledge_template.tex')
+            vocab = model.wv if hasattr(model, 'wv') else model
             
-            report_latex = template.render(
-                target_disease_name=self.disease_name.replace('_', ' ').title(),
-                target_year=self.target_year,
-                model_name=self.model_subfolder,
-                **plots_status
-            )
+            # Embedding da doença
+            found_disease = False
+            for variant in [self.disease_name, self.disease_name.lower(), self.disease_name.replace(' ', '_'), self.disease_name.lower().replace(' ', '_')]:
+                if variant in vocab:
+                    vec = vocab[variant]
+                    all_embeddings.append((year, "DISEASE", vec))
+                    pca_input_vectors.append(vec)
+                    found_disease = True
+                    break
             
-            out_file = self.reports_path / f'report_{self.model_subfolder}_{self.target_year}.tex'
-            with open(out_file, 'w', encoding='utf-8') as f:
-                f.write(report_latex)
-                
-            self.logger.info(f"Report LaTeX saved: {out_file}")
-            return out_file
+            # Embeddings dos compostos
+            for compound in compounds:
+                for variant in [compound, compound.lower(), compound.replace(' ', '_'), compound.lower().replace(' ', '_')]:
+                    if variant in vocab:
+                        vec = vocab[variant]
+                        all_embeddings.append((year, compound, vec))
+                        pca_input_vectors.append(vec)
+                        break
+        
+        if not pca_input_vectors:
+            self.logger.warning("No embeddings found for PCA plot.")
+            return
             
-        except Exception as e:
-            self.logger.error(f"Error generating LaTeX: {e}")
-            return None
+        # 3. Aplicar PCA
+        pca = PCA(n_components=2)
+        reduced_vectors = pca.fit_transform(np.array(pca_input_vectors))
+        
+        # Mapear vetores reduzidos de volta
+        for i, (year, label, _) in enumerate(all_embeddings):
+            all_embeddings[i] = (year, label, reduced_vectors[i])
+            
+        # 4. Plotagem
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Cores para compostos
+        cmap = plt.get_cmap('tab20')
+        colors = {compound: cmap(i % 20) for i, compound in enumerate(compounds)}
+        colors["DISEASE"] = "black"
+        
+        from collections import defaultdict
+        trajectories = defaultdict(list)
+        for year, label, vec in all_embeddings:
+            trajectories[label].append((year, vec))
+            
+        for label, points in trajectories.items():
+            points.sort(key=lambda x: x[0])
+            coords = np.array([p[1] for p in points])
+            color = colors.get(label, "grey")
+            
+            # Trajetória (faded dotted line)
+            if len(coords) > 1:
+                ax.plot(coords[:, 0], coords[:, 1], linestyle=':', color=color, alpha=0.3, linewidth=1)
+
+            # Posição final (ponto sólido)
+            last_vec = coords[-1]
+            marker = 'X' if label == "DISEASE" else 'o'
+            size = 100 if label == "DISEASE" else 50
+            ax.scatter(last_vec[0], last_vec[1], color=color, marker=marker, s=size, label=label if label != "DISEASE" else f"Target: {self.disease_name}")
+            
+            # Label para o ponto final
+            ax.annotate(label, (last_vec[0], last_vec[1]), xytext=(3, 3), textcoords='offset points', fontsize=8, alpha=0.8)
+
+        ax.set_title(f"PCA Trajectory of Recommended Compounds ({self.start_year}-{self.target_year})")
+        ax.set_xlabel("PCA 1")
+        ax.set_ylabel("PCA 2")
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='x-small')
+        ax.grid(True, alpha=0.2)
+        plt.tight_layout()
+        
+        output_path = self.plots_path / f"pca_trajectory_{self.target_year}.png"
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        self.logger.info(f"PCA trajectory plot saved: {output_path}")
 
     def run(self, max_new_topics: int = 8, max_total_topics: int = 10) -> bool:
         """Executa a geração do relatório e feedback loop."""
         self.logger.info("=== Starting Report Generation ===")
         
-        # 1. Gerar Plots
-        plots_data = self.process_plots()
+        # 1. Gerar Plots Históricos
+        self.process_plots()
+
+        # 2. Gerar Plot PCA de Trajetória
+        self.generate_pca_trajectory_plot()
         
-        # 2. Gerar lista de Tratamentos Potenciais (Salva em data/disease/potential_treatments.txt)
-        # Usa 'score' como métrica principal para sugestão
+        # 3. Gerar lista de Tratamentos Potenciais
         top_score = self._get_top_compounds_from_file('score', self.target_year)
         if top_score:
             pt_path = self.base_path / 'potential_treatments.txt'
             try:
-                with open(pt_path, 'w') as f:
+                with open(pt_path, 'w', encoding='utf-8') as f:
                     for _, name in top_score:
                         f.write(f"{name}\n")
                 self.logger.info(f"Potential treatments list updated: {pt_path}")
                 
-                # 3. Executar Feedback Loop (Atualiza topics_of_interest.txt)
+                # 4. Executar Feedback Loop
                 self.logger.info("Running feedback loop...")
                 self.feedback_new_topics(max_total_topics=max_total_topics, max_new_topics=max_new_topics)
                 
             except Exception as e:
                 self.logger.error(f"Error saving potential treatments: {e}")
         else:
-            self.logger.warning("No top compounds found by score. Skipping potential treatments generation.")
+            self.logger.warning("No top compounds found by score. Skipping feedback loop.")
 
-        # 4. Gerar Relatório LaTeX
-        if JINJA2_AVAILABLE:
-            self.generate_latex_report(plots_data)
-            
         self.logger.info("=== Report Generation Complete ===")
         return True
 
