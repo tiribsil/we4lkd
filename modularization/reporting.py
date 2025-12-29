@@ -237,27 +237,37 @@ class LatentKnowledgeReportGenerator:
 
     def _load_model(self, year: int) -> Optional[object]:
         """Loads the model for a specific year."""
-        # Pattern: *_{start_year}_{year}.model
-        pattern = re.compile(rf'.*_(\d+)_{year}\.model$')
+        # Pattern: *_{year}.model or *_{start}_{year}.model
+        # We try to find a file ending in _{year}.model in the subfolder
         if not self.model_directory.exists():
             return None
             
-        for model_file in self.model_directory.glob('*.model'):
-            if pattern.match(model_file.name):
+        candidates = list(self.model_directory.glob(f'*_{year}.model'))
+        if not candidates:
+            # Try searching with Regex for more flexibility
+            pattern = re.compile(rf'.*_(\d+)_{year}\.model$')
+            for model_file in self.model_directory.glob('*.model'):
+                if pattern.match(model_file.name):
+                    candidates.append(model_file)
+                    break
+        
+        if candidates:
+            model_file = candidates[0]
+            try:
+                return Word2Vec.load(str(model_file))
+            except Exception:
                 try:
-                    return Word2Vec.load(str(model_file))
+                    return KeyedVectors.load(str(model_file))
                 except Exception:
-                    try:
-                        return KeyedVectors.load(str(model_file))
-                    except Exception:
-                        self.logger.error(f"Failed to load model {model_file}")
+                    self.logger.error(f"Failed to load model {model_file}")
         return None
 
     def generate_pca_trajectory_plot(self):
         """
-        Gera um gráfico PCA 2D mostrando a trajetória da doença e dos compostos recomendados.
+        Gera um gráfico PCA 2D mostrando a trajetória dos compostos recomendados
+        relativa à doença (que fica na origem).
         """
-        self.logger.info("Generating PCA trajectory plot...")
+        self.logger.info("Generating refined PCA trajectory plot...")
         # 1. Obter top compostos recomendados para o ano alvo (por 'score')
         top_compounds_data = self._get_top_compounds_from_file('score', self.target_year)
         if not top_compounds_data:
@@ -268,8 +278,9 @@ class LatentKnowledgeReportGenerator:
         
         # 2. Coletar embeddings para cada ano no período [start_year, target_year]
         years = range(self.start_year, self.target_year + 1)
-        all_embeddings = [] # Lista de (year, label, vector)
-        pca_input_vectors = []
+        
+        # Estrutura: data_by_year[year] = { label: vector }
+        data_by_year = {}
         
         for year in years:
             model = self._load_model(year)
@@ -277,80 +288,99 @@ class LatentKnowledgeReportGenerator:
                 continue
             
             vocab = model.wv if hasattr(model, 'wv') else model
+            year_data = {}
             
             # Embedding da doença
-            found_disease = False
+            dis_vec = None
             for variant in [self.disease_name, self.disease_name.lower(), self.disease_name.replace(' ', '_'), self.disease_name.lower().replace(' ', '_')]:
                 if variant in vocab:
-                    vec = vocab[variant]
-                    all_embeddings.append((year, "DISEASE", vec))
-                    pca_input_vectors.append(vec)
-                    found_disease = True
+                    dis_vec = vocab[variant]
                     break
             
-            # Embeddings dos compostos
+            if dis_vec is None:
+                continue
+                
+            year_data["DISEASE"] = dis_vec
+            
+            # Embeddings dos compostos (RELATIVOS à doença)
             for compound in compounds:
                 for variant in [compound, compound.lower(), compound.replace(' ', '_'), compound.lower().replace(' ', '_')]:
                     if variant in vocab:
-                        vec = vocab[variant]
-                        all_embeddings.append((year, compound, vec))
-                        pca_input_vectors.append(vec)
+                        year_data[compound] = vocab[variant] - dis_vec
                         break
-        
-        if not pca_input_vectors:
-            self.logger.warning("No embeddings found for PCA plot.")
-            return
             
-        # 3. Aplicar PCA
-        pca = PCA(n_components=2)
-        reduced_vectors = pca.fit_transform(np.array(pca_input_vectors))
+            # Ajustar a própria doença para ser a origem (opcional, mas conceitualmente correto aqui)
+            year_data["DISEASE"] = dis_vec - dis_vec # [0, 0, ... 0]
+            
+            data_by_year[year] = year_data
         
-        # Mapear vetores reduzidos de volta
-        for i, (year, label, _) in enumerate(all_embeddings):
-            all_embeddings[i] = (year, label, reduced_vectors[i])
+        if not data_by_year:
+            self.logger.warning("No consistent embeddings found for PCA plot.")
+            return
+
+        # 3. Preparar entrada para PCA
+        # Queremos o PCA fitado em todos os vetores relativos para manter a escala consistente
+        all_rel_vectors = []
+        labels_years = [] # (year, label)
+        
+        for year, year_data in data_by_year.items():
+            for label, vec in year_data.items():
+                all_rel_vectors.append(vec)
+                labels_years.append((year, label))
+        
+        if not all_rel_vectors:
+            return
+
+        pca = PCA(n_components=2)
+        reduced = pca.fit_transform(np.array(all_rel_vectors))
+        
+        # Reorganizar trajetórias
+        from collections import defaultdict
+        trajectories = defaultdict(list)
+        for i, (year, label) in enumerate(labels_years):
+            trajectories[label].append((year, reduced[i]))
             
         # 4. Plotagem
-        fig, ax = plt.subplots(figsize=(10, 8))
+        fig, ax = plt.subplots(figsize=(12, 9))
         
-        # Cores para compostos
         cmap = plt.get_cmap('tab20')
         colors = {compound: cmap(i % 20) for i, compound in enumerate(compounds)}
         colors["DISEASE"] = "black"
         
-        from collections import defaultdict
-        trajectories = defaultdict(list)
-        for year, label, vec in all_embeddings:
-            trajectories[label].append((year, vec))
-            
         for label, points in trajectories.items():
             points.sort(key=lambda x: x[0])
             coords = np.array([p[1] for p in points])
             color = colors.get(label, "grey")
             
-            # Trajetória (faded dotted line)
+            # Trajetória (Dotted line, 80% opacity)
             if len(coords) > 1:
-                ax.plot(coords[:, 0], coords[:, 1], linestyle=':', color=color, alpha=0.3, linewidth=1)
+                ax.plot(coords[:, 0], coords[:, 1], linestyle=':', color=color, alpha=0.8, linewidth=1.2)
 
-            # Posição final (ponto sólido)
+            # Ponto Final
             last_vec = coords[-1]
-            marker = 'X' if label == "DISEASE" else 'o'
-            size = 100 if label == "DISEASE" else 50
-            ax.scatter(last_vec[0], last_vec[1], color=color, marker=marker, s=size, label=label if label != "DISEASE" else f"Target: {self.disease_name}")
+            if label == "DISEASE":
+                ax.scatter(last_vec[0], last_vec[1], color='black', marker='X', s=150, label="Target Disease (Origin)", zorder=5)
+            else:
+                ax.scatter(last_vec[0], last_vec[1], color=color, marker='o', s=60, label=label, alpha=1.0)
             
-            # Label para o ponto final
-            ax.annotate(label, (last_vec[0], last_vec[1]), xytext=(3, 3), textcoords='offset points', fontsize=8, alpha=0.8)
+            # REMOVIDO: ax.annotate(...) conforme solicitado pelo usuário
 
-        ax.set_title(f"PCA Trajectory of Recommended Compounds ({self.start_year}-{self.target_year})")
+        ax.set_title(f"PCA Trajectory of Recommendations relative to '{self.disease_name}'\nPeriod: {self.start_year}-{self.target_year}", fontsize=14)
         ax.set_xlabel("PCA 1")
         ax.set_ylabel("PCA 2")
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='x-small')
-        ax.grid(True, alpha=0.2)
+        
+        # Colocar a legenda fora do plot se for muito grande
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
+        ax.grid(True, linestyle='--', alpha=0.4)
+        ax.axhline(y=0, color='k', linestyle='-', alpha=0.2)
+        ax.axvline(x=0, color='k', linestyle='-', alpha=0.2)
+        
         plt.tight_layout()
         
-        output_path = self.plots_path / f"pca_trajectory_{self.target_year}.png"
+        output_path = self.plots_path / f"pca_trajectory_relative_{self.target_year}.png"
         fig.savefig(output_path, dpi=150)
         plt.close(fig)
-        self.logger.info(f"PCA trajectory plot saved: {output_path}")
+        self.logger.info(f"Refined PCA plot saved: {output_path}")
 
     def run(self, max_new_topics: int = 8, max_total_topics: int = 10) -> bool:
         """Executa a geração do relatório e feedback loop."""
