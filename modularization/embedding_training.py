@@ -431,7 +431,7 @@ class CandidateModelTraining:
         Executa LHS (Latin Hypercube Sampling) e treina modelos em paralelo.
         Salva os modelos em disco e popula self.model_combinations para uso futuro.
         """
-        self.logger.info("=== Starting Candidate Training (LHS + Parallel) ===")
+        self.logger.info("=== Starting Candidate Training ===")
         
         # 1. Preparar sentenças internamente
         sentences = self._prepare_sentences(self.start_year, self.end_year)
@@ -479,6 +479,9 @@ class CandidateModelTraining:
         add_tasks('w2v', w2v_sets)
         add_tasks('ft', ft_sets)
 
+        berto_params = self.model_combinations["w2v_berto_et_al"]
+        tasks.append(("w2v_berto_et_al", "w2v", berto_params))
+
         # 5. Worker para execução paralela
         def _worker(task_data):
             model_key, arch, params = task_data
@@ -509,10 +512,8 @@ class CandidateModelTraining:
                 
                 if result:
                     m_key, m_params, m_instance = result
-                    # Salva no disco (CRUCIAL para o ValidationModule encontrar depois)
                     self._save_trained_model(m_instance, m_key, self.start_year, self.end_year)
                     
-                    # Atualiza o dicionário de combinações (CRUCIAL para o ModelSelector)
                     self.model_combinations[m_key] = m_params
                     self.logger.info(f"Finished & Saved: {m_key}")
                 else:
