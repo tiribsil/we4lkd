@@ -127,4 +127,7 @@ Nova pipeline: periodos separados para expansão, treinamento em lote, seleção
 
 módulo de contextualização com biomistral
 
-objetivos: melhoria em modelos candidatos, refatoração e pipeline preliminar
+objetivos: melhoria em modelos candidatos (foi, para w2v), refatoração (foi) e pipeline preliminar (em andamento, mas quase)
+
+todo: melhoria na heuristica, LLM para analisar os artigos e gerar tabela de reports
+
