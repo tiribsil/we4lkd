@@ -3,7 +3,7 @@ from pathlib import Path
 from llama_cpp import Llama
 from huggingface_hub import hf_hub_download
 from typing import Optional
-from .utils import get_logger
+from utils import get_logger
 
 class LLMManager:
     """Manages local GGUF models and LLM initialization."""

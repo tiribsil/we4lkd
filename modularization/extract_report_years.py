@@ -4,8 +4,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 from tqdm import tqdm
-from .utils import normalize_disease_name, get_logger
-from .llm_utils import get_report_year_llm
+from utils import normalize_disease_name, get_logger
+from llm_utils import get_report_year_llm
 
 class GroundTruthGenerator:
     """

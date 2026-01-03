@@ -3,7 +3,7 @@ import json
 import re
 from typing import List, Dict, Optional
 from utils import get_logger
-from .llm_utils import get_biomedical_llm
+from llm_utils import get_biomedical_llm
 
 # Setup Instructions:
 # pip install llama-cpp-python
