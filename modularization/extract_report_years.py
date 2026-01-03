@@ -22,9 +22,6 @@ class GroundTruthGenerator:
         self.cache_dir = self.base_path / "ground_truth_cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Regex for pre-filtering (disease must be present)
-        self.disease_regex = re.compile(r'\b' + re.escape(self.disease_name).replace('_', ' ') + r'\b', re.IGNORECASE)
-        
         # LLM initialization
         self._llm = None
 
@@ -94,7 +91,7 @@ Abstract: {abstract}
                 self.logger.warning(f"Failed to load cache ({e}). Regenerating...")
 
         # 2. Gerar do zero
-        self.logger.info("Generating Ground Truth (Year Reported) using LLM...")
+        self.logger.info("Generating Ground Truth using LLM...")
         df = self._load_corpus()
         compounds = self._load_whitelist()
         
@@ -104,7 +101,7 @@ Abstract: {abstract}
         df['summary'] = df['summary'].astype(str)
         
         # Pre-filter papers that mention the disease
-        disease_mask = df['summary'].str.contains(self.disease_regex)
+        disease_mask = df['summary'].str.contains(self.disease_name)
         disease_df = df[disease_mask].sort_values('year_extracted').copy()
         
         if disease_df.empty:
