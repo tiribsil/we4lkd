@@ -4,26 +4,15 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 from tqdm import tqdm
-from utils import normalize_disease_name, get_logger
+from .utils import normalize_disease_name, get_logger
+from .llm_utils import get_report_year_llm
 
 class GroundTruthGenerator:
     """
-    Responsável por determinar o 'Ground Truth': o ano em que cada composto
-    foi de fato reportado na literatura associado à doença em contexto terapêutico.
-    Inclui sistema de cache para evitar reprocessamento do corpus.
+    Responsável por determinar o 'Ground Truth' usando um LLM local para verificar
+    se um composto é reportado como tratamento para a doença.
     """
     
-    THERAPEUTIC_KEYWORDS = {
-        'treat', 'treatment', 'therapy', 'therapeutic', 'efficacy', 'effective',
-        'clinical trial', 'patients', 'remission', 'response', 'inhibit', 
-        'antiproliferative', 'antitumor', 'antineoplastic', 'chemotherapy', 'regimen'
-    }
-
-    NON_THERAPEUTIC_KEYWORDS = {
-        'toxic', 'toxicity', 'carcinogen', 'carcinogenic', 'mutagen', 'mutagenic',
-        'side effect', 'adverse', 'poison', 'environmental', 'exposure', 'risk factor'
-    }
-
     def __init__(self, disease_name: str, logger: Optional[logging.Logger] = None):
         self.disease_name = normalize_disease_name(disease_name)
         self.logger = logger or get_logger(self.__class__.__name__)
@@ -33,10 +22,41 @@ class GroundTruthGenerator:
         self.cache_dir = self.base_path / "ground_truth_cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Regex compilation
-        self.positive_regex = re.compile(r'\b(?:' + '|'.join(self.THERAPEUTIC_KEYWORDS) + r')\b', re.IGNORECASE)
-        self.negative_regex = re.compile(r'\b(?:' + '|'.join(self.NON_THERAPEUTIC_KEYWORDS) + r')\b', re.IGNORECASE)
-        self.disease_regex = re.compile(r'\b' + re.escape(self.disease_name) + r'\b', re.IGNORECASE)
+        # Regex for pre-filtering (disease must be present)
+        self.disease_regex = re.compile(r'\b' + re.escape(self.disease_name).replace('_', ' ') + r'\b', re.IGNORECASE)
+        
+        # LLM initialization
+        self._llm = None
+
+    @property
+    def llm(self):
+        if self._llm is None:
+            self._llm = get_report_year_llm()
+        return self._llm
+
+    def _verify_with_llm(self, compound: str, abstract: str) -> bool:
+        """
+        Usa o LLM para verificar se o abstract indica que o composto é um tratamento.
+        """
+        prompt = f"""[INST] <<SYS>>
+You are a medical research assistant. Answer only YES or NO.
+<</SYS>>
+
+Does the following abstract indicate that {compound} is officialized as a treatment for {self.disease_name}?
+Abstract: {abstract}
+[/INST]"""
+        
+        try:
+            output = self.llm.create_completion(
+                prompt=prompt,
+                max_tokens=10, 
+                temperature=0.01,
+            )
+            response = output['choices'][0]['text'].strip().upper()
+            return "YES" in response
+        except Exception as e:
+            self.logger.error(f"LLM inference error: {e}")
+            return False
 
     def _load_corpus(self) -> pd.DataFrame:
         if not self.corpus_path.exists():
@@ -57,57 +77,70 @@ class GroundTruthGenerator:
         with open(self.whitelist_path, 'r') as f:
             return [line.strip() for line in f if line.strip()]
 
-    def generate_ground_truth(self, threshold: int = 3, force_regenerate: bool = False) -> Dict[str, int]:
+    def generate_ground_truth(self, threshold: int = 1, force_regenerate: bool = False) -> Dict[str, int]:
         """
         Retorna dicionário {composto: ano_primeiro_reporte}.
-        Usa cache baseado no threshold para evitar reprocessamento.
+        Usa LLM para validar abstracts que mencionam a doença e o composto.
         """
-        cache_file = self.cache_dir / f"ground_truth_t{threshold}.csv"
+        cache_file = self.cache_dir / f"ground_truth_llm.csv"
 
         # 1. Tentar carregar do cache
         if cache_file.exists() and not force_regenerate:
             self.logger.info("Loading Ground Truth from cache.")
             try:
                 df_cache = pd.read_csv(cache_file)
-                # Converter para dicionário: compound -> year
                 return dict(zip(df_cache['compound'], df_cache['year']))
             except Exception as e:
                 self.logger.warning(f"Failed to load cache ({e}). Regenerating...")
 
-        # 2. Gerar do zero (Lógica pesada)
-        self.logger.info("Generating Ground Truth (Year Reported) from corpus...")
+        # 2. Gerar do zero
+        self.logger.info("Generating Ground Truth (Year Reported) using LLM...")
         df = self._load_corpus()
         compounds = self._load_whitelist()
         
         if df.empty or not compounds:
             return {}
 
-        # Ensure text columns are strings
         df['summary'] = df['summary'].astype(str)
         
-        # Pre-filter: Keyword Context
-        mask_positive = df['summary'].str.contains(self.positive_regex)
-        mask_negative = df['summary'].str.contains(self.negative_regex)
+        # Pre-filter papers that mention the disease
+        disease_mask = df['summary'].str.contains(self.disease_regex)
+        disease_df = df[disease_mask].sort_values('year_extracted').copy()
         
-        context_df = df[mask_positive & ~mask_negative].copy()
-        context_df = context_df[context_df['summary'].str.contains(self.disease_regex)]
-        
-        if context_df.empty:
-            self.logger.warning("No therapeutic abstracts found for the disease.")
+        if disease_df.empty:
+            self.logger.warning("No abstracts found for the disease.")
             return {}
 
         year_reported = {}
         
-        for compound in tqdm(compounds, desc="Scanning compounds in corpus"):
+        for compound in tqdm(compounds, desc="Verifying compounds with LLM"):
             try:
                 compound_pat = r'\b' + re.escape(compound) + r'\b'
-                counts = context_df['summary'].str.count(compound_pat, flags=re.IGNORECASE)
-                eligible = context_df[counts >= threshold]
+                # Filter abstracts mentioning the compound
+                compound_mask = disease_df['summary'].str.contains(compound_pat, flags=re.IGNORECASE)
+                eligible_abstracts = disease_df[compound_mask]
                 
-                if not eligible.empty:
-                    first_year = eligible['year_extracted'].min()
-                    year_reported[compound] = int(first_year)
-            except Exception:
+                if eligible_abstracts.empty:
+                    continue
+
+                valid_count = 0
+                first_year = None
+                
+                # Check abstracts in chronological order
+                for _, row in eligible_abstracts.iterrows():
+                    if self._verify_with_llm(compound, row['summary']):
+                        valid_count += 1
+                        if first_year is None:
+                            first_year = int(row['year_extracted'])
+                        
+                        if valid_count >= threshold:
+                            break
+                
+                if first_year is not None:
+                    year_reported[compound] = first_year
+                    
+            except Exception as e:
+                self.logger.error(f"Error processing {compound}: {e}")
                 continue
         
         self.logger.info(f"Ground Truth generated: {len(year_reported)} compounds found.")
