@@ -35,13 +35,29 @@ class GroundTruthGenerator:
         """
         Usa o LLM para verificar se o abstract indica que o composto é um tratamento.
         """
-        prompt = f"""[INST] <<SYS>>
-You are a medical research assistant. Answer only YES or NO.
-<</SYS>>
+        prompt = f"""<|im_start|>system
+        You are a strict medical data curator. Your task is to validate therapeutic compounds.
+        Criteria for YES:
+        - The compound is discussed as a DIRECT treatment for the disease malignancy (killing cancer cells, tumor inhibition).
+        - Includes experimental drugs and approved treatments.
 
-Does the following abstract indicate that {compound} is officialized as a treatment for {self.disease_name}?
-Abstract: {abstract}
-[/INST]"""
+        Criteria for NO (Strict Exclusions):
+        - SUPPORTIVE CARE: Antibiotics, Antifungals, Antiemetics, Painkillers.
+        - LAB REAGENTS: Solvents (Ethanol, DMSO), buffers.
+        - TOXICITY: Compounds mentioned only as causing the disease.
+        - NEGATIVE: The abstract explicitly states it is ineffective.
+
+        Answer only YES or NO.
+        <|im_end|>
+        <|im_start|>user
+        Does the following abstract indicate that {compound} is a DIRECT treatment for {self.disease_name}?
+
+        Abstract: {abstract[:10000]}
+
+        [/system]
+
+        [INST]
+        """
         
         try:
             output = self.llm.create_completion(

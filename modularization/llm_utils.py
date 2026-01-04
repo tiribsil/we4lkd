@@ -57,7 +57,7 @@ def get_report_year_llm() -> Llama:
     manager = LLMManager(
         model_repo="Qwen/Qwen2.5-1.5B-Instruct-GGUF",
         model_file="qwen2.5-1.5b-instruct-q4_k_m.gguf",
-        n_ctx=4096
+        n_ctx=16384
     )
     return manager.get_llm()
 
