@@ -29,15 +29,36 @@ class ValidationModule:
     """
     
     DEFAULT_BIOMOLECULE_BLACKLIST = frozenset({
-        'thymidine', 'deoxycytidine', 'uridine', 'cytidine', 'adenosine', 
-        'guanine', 'cytosine', 'thymine', 'aminoacids', 'glutathione', 
-        'arginine', 'lysine', 'valine', 'citrulline', 'leucine', 'isoleucine',
-        'cholesterol', 'histamine', 'folicacid', 'cholecalciferol', 
-        'retinoicacid', 'nicotinicacid', 'alpha-tocopherol', 'lithium', 
-        'magnesium', 'oxygen', 'nitrogen', 'platinum', 'hydrogenperoxide', 
-        'radium', 'potassium', 'agar', 'hemin', 'phorbol12-myristate13-acetate', 
-        'methylcellulose(4000cps)', 'insulin', 'triphosphate', 
-        'histaminedihydrochloride', 'water', 'carbon', 'gold'
+    # --- 1. LABORATORY SOLVENTS & VEHICLES (Never a drug) ---
+    'dimethylsulfoxide', 'dmso', 'ethanol', 'methanol', 'chloroform', 
+    'acetone', 'phenol', 'formaldehyde', 'formalin', 'glycerol', 
+    'propylene glycol', 'peg', 'polyethylene glycol', 'tween', 
+    'sds', 'sodium dodecyl sulfate', 'triton x-100', 'saline', 'pbs',
+    'methylcellulose(4000cps)', 'agar', 'water',
+
+    # --- 2. BASIC METABOLITES & BUILDING BLOCKS (Too generic to be predictions) ---
+    # While some (like amino acids) are supplements, predicting "amino acids" 
+    # is rarely a useful model output.
+    'thymidine', 'deoxycytidine', 'uridine', 'cytidine', 'adenosine', 
+    'guanine', 'cytosine', 'thymine', 'triphosphate', 
+    'atp', 'adp', 'amp', 'nad', 'nadh', 'nadph',
+    'aminoacids', 'glutathione', 'creatinine', 'urea', 'uric acid',
+    'pyruvate', 'lactate', 
+    
+    # --- 3. BASIC ELEMENTS & GASES (Unless part of a specific salt) ---
+    'oxygen', 'nitrogen', 'carbon', 'hydrogenperoxide',
+
+    # --- 4. EXPERIMENTAL CONTROLS ---
+    'placebo', 'control', 'vehicle', 'sham', 'reference', 'standard',
+    'stop', 'blank',
+
+    # --- 5. IMAGING AGENTS (Diagnostics, not Treatments) ---
+    'technetium', 'barium', 'gadolinium', 'luciferase', 'gfp', 'fluorescein',
+    'bromide', 'ethidium bromide', 
+    
+    # --- 6. TOXIC REAGENTS ---
+    'phorbol12-myristate13-acetate', 'pma', 'lps', 'lipopolysaccharide',
+    'tpa', 'tetradecanoylphorbol acetate'
     })
     
     def __init__(
@@ -228,7 +249,8 @@ class ValidationModule:
         if self.whitelist_cache_path.exists():
             self.logger.info(f"Loading whitelist from cache: {self.whitelist_cache_path}")
             with open(self.whitelist_cache_path, 'r', encoding='utf-8') as f:
-                return {line.strip() for line in f if line.strip()}
+                compounds = {line.strip() for line in f if line.strip()}
+                return compounds - self.biomolecule_blacklist
         
         self.logger.info("Cache not found. Generating whitelist from data sources...")
         
