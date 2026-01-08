@@ -100,7 +100,11 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def normalize_disease_name(disease_name: str) -> str:
-        return disease_name.lower().translate(str.maketrans('', '', string.punctuation)).replace(' ', '_')
+    # Remove punctuation except underscores
+    punctuation_to_remove = string.punctuation.replace('_', '')
+    normalized = disease_name.lower().translate(str.maketrans('', '', punctuation_to_remove))
+    # Replace spaces with underscores
+    return normalized.replace(' ', '_')
 
 def _get_checkpoint_path(disease_name: str) -> Path:
     return Path(f"artifacts/{disease_name}_pipeline_checkpoint.json")

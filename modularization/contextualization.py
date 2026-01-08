@@ -1,17 +1,13 @@
 import os
 import json
 import re
-from llama_cpp import Llama
-from pathlib import Path
 from typing import List, Dict, Optional
-from huggingface_hub import hf_hub_download
 from utils import get_logger
+from llm_utils import get_biomedical_llm
 
 # Setup Instructions:
 # pip install llama-cpp-python
 # pip install huggingface-hub
-# mkdir -p biomedical_models
-# huggingface-cli download QuantFactory/BioMistral-7B-GGUF BioMistral-7B.Q4_K_M.gguf --local-dir biomedical_models
 
 class ContextualizationModule:
     """Medical compound analyzer using BioMistral-7B (CPU-Only)."""
@@ -24,29 +20,7 @@ class ContextualizationModule:
             n_ctx: Context size
         """
         self.logger = get_logger(self.__class__.__name__)
-        self.model_path = Path("./biomedical_models/BioMistral-7B.Q4_K_M.gguf")
-        
-        if not self.model_path.exists():
-            self.logger.info(f"Model not found at {self.model_path}. Downloading...")
-            try:
-                self.model_path.parent.mkdir(parents=True, exist_ok=True)
-                hf_hub_download(
-                    repo_id="QuantFactory/BioMistral-7B-GGUF",
-                    filename="BioMistral-7B.Q4_K_M.gguf",
-                    local_dir=str(self.model_path.parent),
-                    local_dir_use_symlinks=False
-                )
-                self.logger.info(f"Model downloaded successfully to {self.model_path}")
-            except Exception as e:
-                raise RuntimeError(f"Failed to download model: {e}")
-        
-        self.llm = Llama(
-            model_path=str(self.model_path),
-            n_ctx=n_ctx,
-            n_gpu_layers=0,
-            n_threads=os.cpu_count(),
-            verbose=False,
-        )
+        self.llm = get_biomedical_llm(n_ctx=n_ctx)
         self.disease = disease
     
     def _create_prompt(self, compound: str) -> str:

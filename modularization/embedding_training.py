@@ -21,7 +21,6 @@ class ModelType(Enum):
     """Supported embedding model types."""
     WORD2VEC = "word2vec"
     FASTTEXT = "fasttext"
-    GLOVE = "glove"
 
 
 @dataclass
@@ -143,93 +142,6 @@ class FastTextModel(BaseEmbeddingModel):
         return self.apply_pca(embeddings)
 
 
-class GloVeModel(BaseEmbeddingModel):
-    """GloVe embedding model trained from scratch using Mittens."""
-
-    def train(self, sentences: List[List[str]]) -> None:
-        # Expected hyperparameters for GloVe training:
-        # [vector_size, window, max_iter, learning_rate, min_count, x_max]
-        params = {
-            'vector_size': self.config.vector_size,
-            'window': self.config.custom_params.get('window', 5),
-            'min_count': self.config.custom_params.get('min_count', 2),
-            'max_iter': self.config.custom_params.get('max_iter', 15),
-            'alpha': self.config.custom_params.get('alpha', 0.05),
-            'learning_rate': self.config.custom_params.get('learning_rate', 0.05),
-            'x_max': self.config.custom_params.get('x_max', 100),
-        }
-
-        self.logger.info(f"Training GloVe model with Mittens using params: {params}")
-
-        # 1. Create Corpus for GloVe and build co-occurrence matrix
-        all_words = list(itertools.chain.from_iterable(sentences))
-        vocab = {word: i for i, word in enumerate(sorted(set(all_words)))} # Ensure consistent vocabulary order
-
-        # Filter vocabulary by min_count
-        word_counts = pd.Series(all_words).value_counts()
-        filtered_vocab_list = word_counts[word_counts >= params['min_count']].index.tolist()
-        filtered_vocab = {word: i for i, word in enumerate(sorted(filtered_vocab_list))}
-
-        if not filtered_vocab:
-            self.logger.warning("No words left after min_count filtering for GloVe. Skipping training.")
-            self.model = None
-            self.word_vectors_keyed_vectors = KeyedVectors(vector_size=params['vector_size'])
-            return
-
-        # Mittens expects raw sentences (list of lists of words)
-        cooc_model = GloVe(params['window'])
-        cooc_matrix = cooc_model.build_cooccurrence_matrix(sentences, vocabulary=filtered_vocab, min_count=params['min_count'])
-        
-        # 2. Initialize and train Mittens model
-        mittens_model = Mittens(
-            n=params['vector_size'],
-            max_iter=params['max_iter'],
-            eta=params['learning_rate'],
-            alpha=params['alpha'],
-            max_count=params['x_max'],
-        )
-
-        # Train the model
-        mittens_model.fit(cooc_matrix)
-
-        # 3. Store word vectors in Gensim KeyedVectors format for compatibility
-        self.model = mittens_model
-        self.vocabulary = list(filtered_vocab.keys())
-        self.word_vectors_keyed_vectors = KeyedVectors(vector_size=params['vector_size'])
-
-        # Add vectors to KeyedVectors object
-        for i, word in enumerate(self.vocabulary):
-            self.word_vectors_keyed_vectors.add_vector(word, mittens_model.get_embedding(word))
-        
-        self.logger.info(f"GloVe trained: {len(self.vocabulary)} words, {len(mittens_model.get_vectors())} embeddings")
-
-        # Clean up large objects
-        del cooc_matrix
-        del all_words
-        del vocab
-        del word_counts
-        del filtered_vocab
-        gc.collect()
-
-    def get_embeddings(self, sentences: Optional[List[str]] = None) -> np.ndarray:
-        if self.model is None or self.word_vectors_keyed_vectors is None:
-            return np.array([])
-
-        if sentences:
-            embeddings = []
-            for sentence in sentences:
-                words = sentence.lower().split()
-                vectors = [self.word_vectors_keyed_vectors[w] 
-                           for w in words if w in self.word_vectors_keyed_vectors.key_to_index]
-                if vectors:
-                    embeddings.append(np.mean(vectors, axis=0))
-                else:
-                    embeddings.append(np.zeros(self.config.vector_size))
-            embeddings = np.array(embeddings)
-        else:
-            embeddings = self.word_vectors_keyed_vectors.vectors
-        
-        return self.apply_pca(embeddings)
 
 
 class ModelFactory:
@@ -240,7 +152,6 @@ class ModelFactory:
         model_map = {
             ModelType.WORD2VEC: Word2VecModel,
             ModelType.FASTTEXT: FastTextModel,
-            ModelType.GLOVE: GloVeModel,
         }
         
         model_class = model_map.get(config.model_type)
@@ -256,11 +167,15 @@ class CandidateModelTraining:
         disease_name: str,
         start_year: int,
         end_year: int,
+        use_lhs: bool = True,
+        num_combinations: int = 7
     ):
         self.logger = get_logger(self.__class__.__name__)
         self.disease_name = normalize_disease_name(disease_name)
         self.start_year = start_year
         self.end_year = end_year
+        self.use_lhs = use_lhs
+        self.num_combinations = num_combinations
         
         self.model_combinations: Dict[str, List[Any]] = {}
         self.model_combinations.update({
@@ -348,12 +263,6 @@ class CandidateModelTraining:
                 'epochs': params[6], 'workers': params[7], 'min_n': params[8], 'max_n': params[9],
                 'ns_exponent': params[10], 'sample': params[11]
             }
-        elif architecture == 'glove':
-            model_type = ModelType.GLOVE
-            custom_params = {
-                'vector_size': params[0], 'window': params[1], 'max_iter': params[2],
-                'learning_rate': params[3], 'min_count': params[4], 'x_max': params[5],
-            }
         else:
             return None
 
@@ -415,9 +324,6 @@ class CandidateModelTraining:
 
         if hasattr(model_instance.model, 'save'):
             model_instance.model.save(str(model_path))
-        elif isinstance(model_instance, GloVeModel):
-             if model_instance.word_vectors_keyed_vectors:
-                model_instance.word_vectors_keyed_vectors.save_word2vec_format(str(model_path), binary=True)
         elif isinstance(model_instance.model, KeyedVectors):
             model_instance.model.save_word2vec_format(str(model_path), binary=True)
         else:
@@ -457,6 +363,51 @@ class CandidateModelTraining:
             out.append(row)
         return out
 
+    def _generate_grid_samples(self, param_specs: List[tuple], n_samples: int) -> List[Dict[str, Any]]:
+        """
+        Gera amostras de forma sistemática (grade simples).
+        Se n_samples > 1, distribui os níveis entre os parâmetros.
+        """
+        variable_params = [(name, low, high, dtype) for name, low, high, dtype in param_specs if low != high]
+        
+        if not variable_params or n_samples == 1:
+            # Retorna apenas os valores centrais/fixos
+            base_row = {}
+            for name, low, high, dtype in param_specs:
+                if low == high:
+                    base_row[name] = low
+                else:
+                    base_row[name] = self._scale_and_cast(0.5, low, high, dtype)
+            return [base_row] * n_samples
+
+        # Para uma grade simples que atenda exatamente n_samples:
+        # Vamos variar um parâmetro de cada vez, ou distribuir n_samples níveis no parâmetro mais "relevante"
+        # Para ser verdadeiramente uma grade, vamos distribuir n_samples igualmente.
+        # Mas para simplificar e garantir n_samples modelos únicos, vamos variar o parâmetro 'epochs' ou similar.
+        
+        # Estratégia: Pegar o primeiro parâmetro variável e dar a ele n_samples níveis.
+        # Os outros ficam no ponto médio.
+        
+        out = []
+        for i in range(n_samples):
+            row = {}
+            # Nível normalizado entre 0 e 1
+            level = i / (n_samples - 1) if n_samples > 1 else 0.5
+            
+            first_var_found = False
+            for name, low, high, dtype in param_specs:
+                if low == high:
+                    row[name] = low
+                elif not first_var_found:
+                    row[name] = self._scale_and_cast(level, low, high, dtype)
+                    first_var_found = True
+                else:
+                    # Ponto médio para os outros variáveis
+                    row[name] = self._scale_and_cast(0.5, low, high, dtype)
+            out.append(row)
+            
+        return out
+
     def _dict_to_list_params(self, architecture: str, hp: Dict[str, Any]) -> List[Any]:
         """Converte o dicionário do LHS para a lista ordenada esperada pelo _create_config_from_params."""
         if architecture == 'w2v':
@@ -473,12 +424,6 @@ class CandidateModelTraining:
                 hp['negative'], hp['alpha'], hp['epochs'], hp['workers'],
                 hp['min_n'], hp['max_n'], hp['ns_exponent'], hp['sample']
             ]
-        elif architecture == 'glove':
-            # Ordem: [vector_size, window, max_iter, learning_rate, min_count, x_max]
-            return [
-                hp['vector_size'], hp['window'], hp['max_iter'], 
-                hp['learning_rate'], hp['min_count'], hp['x_max']
-            ]
         return []
 
     def run(self) -> Dict[str, List[Any]]:
@@ -486,7 +431,7 @@ class CandidateModelTraining:
         Executa LHS (Latin Hypercube Sampling) e treina modelos em paralelo.
         Salva os modelos em disco e popula self.model_combinations para uso futuro.
         """
-        self.logger.info("=== Starting Candidate Training (LHS + Parallel) ===")
+        self.logger.info("=== Starting Candidate Training ===")
         
         # 1. Preparar sentenças internamente
         sentences = self._prepare_sentences(self.start_year, self.end_year)
@@ -509,16 +454,13 @@ class CandidateModelTraining:
             ('min_n', 2, 3, 'int'), ('max_n', 4, 6, 'int'),
         ]
 
-        glove_specs = [
-            ('vector_size', 50, 300, 'int'), ('window', 2, 8, 'int'),
-            ('max_iter', 10, 50, 'int'), ('learning_rate', 0.01, 0.2, 'float'),
-            ('min_count', 1, 5, 'int'), ('x_max', 10, 100, 'int'),
-        ]
-
-        # 3. Gerar Amostras LHS
-        w2v_sets = self._generate_lhs_samples(w2v_specs, n_sets)
-        ft_sets = self._generate_lhs_samples(ft_specs, n_sets)
-        glove_sets = self._generate_lhs_samples(glove_specs, n_sets)
+        # 3. Gerar Amostras (LHS ou Grid)
+        if self.use_lhs:
+            w2v_sets = self._generate_lhs_samples(w2v_specs, self.num_combinations)
+            ft_sets = self._generate_lhs_samples(ft_specs, self.num_combinations)
+        else:
+            w2v_sets = self._generate_grid_samples(w2v_specs, self.num_combinations)
+            ft_sets = []
 
         # 4. Construir lista de tarefas
         tasks = []
@@ -531,12 +473,14 @@ class CandidateModelTraining:
                 
                 # Converte dict para lista ordenada usada pelo sistema
                 params_list = self._dict_to_list_params(arch, hp)
-                key = f"{arch}_lhs{idx}"
+                key = f"{arch}_comb{idx}"
                 tasks.append((key, arch, params_list))
 
         add_tasks('w2v', w2v_sets)
         add_tasks('ft', ft_sets)
-        add_tasks('glove', glove_sets)
+
+        berto_params = self.model_combinations["w2v_berto_et_al"]
+        tasks.append(("w2v_berto_et_al", "w2v", berto_params))
 
         # 5. Worker para execução paralela
         def _worker(task_data):
@@ -568,10 +512,8 @@ class CandidateModelTraining:
                 
                 if result:
                     m_key, m_params, m_instance = result
-                    # Salva no disco (CRUCIAL para o ValidationModule encontrar depois)
                     self._save_trained_model(m_instance, m_key, self.start_year, self.end_year)
                     
-                    # Atualiza o dicionário de combinações (CRUCIAL para o ModelSelector)
                     self.model_combinations[m_key] = m_params
                     self.logger.info(f"Finished & Saved: {m_key}")
                 else:

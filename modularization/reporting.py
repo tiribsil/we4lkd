@@ -9,13 +9,12 @@ import numpy as np
 from matplotlib import pyplot as plt
 from utils import get_logger, normalize_disease_name, LoggerFactory
 
-try:
-    import jinja2
-    JINJA2_AVAILABLE = True
-except ImportError:
-    JINJA2_AVAILABLE = False
-    print("Warning: jinja2 not available. LaTeX report will not be generated.")
-
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+from gensim.models import Word2Vec, KeyedVectors
+from sklearn.decomposition import PCA
+from utils import get_logger, normalize_disease_name, LoggerFactory
 
 class LatentKnowledgeReportGenerator:
     """
@@ -33,6 +32,7 @@ class LatentKnowledgeReportGenerator:
         self,
         disease_name: str,
         model_subfolder: str, # Ex: "w2v_fixed"
+        start_year: int,      # Ano inicial do período de teste
         target_year: int,     # Ano foco do relatório (geralmente o último)
         top_n_to_plot: int = 10,
         metrics_to_plot: Optional[List[str]] = None,
@@ -43,6 +43,7 @@ class LatentKnowledgeReportGenerator:
         self.disease_name = disease_name
         self.normalized_disease_name = normalize_disease_name(disease_name)
         self.model_subfolder = model_subfolder
+        self.start_year = start_year
         self.target_year = target_year
         self.top_n_to_plot = top_n_to_plot
         self.metrics_to_plot = metrics_to_plot or self.DEFAULT_METRICS
@@ -56,6 +57,7 @@ class LatentKnowledgeReportGenerator:
         self.validation_path = self.base_path / 'validation' / self.model_subfolder
         self.top_n_path = self.validation_path / 'top_n_compounds'
         self.history_path = self.validation_path / 'compound_history'
+        self.model_directory = Path(f'{self.base_path}/models/{self.model_subfolder}')
         
         self.reports_path = self.base_path / 'reports'
         self.plots_path = self.base_path / 'plots' / self.model_subfolder
@@ -233,76 +235,195 @@ class LatentKnowledgeReportGenerator:
 
         return plots_data
 
-    def generate_latex_report(self, plots_status: Dict[str, str]) -> Optional[Path]:
-        """Gera o arquivo .tex"""
-        if not JINJA2_AVAILABLE: return None
+    def _load_model(self, year: int) -> Optional[object]:
+        """Loads the model for a specific year."""
+        # Pattern: *_{year}.model or *_{start}_{year}.model
+        # We try to find a file ending in _{year}.model in the subfolder
+        if not self.model_directory.exists():
+            return None
+            
+        candidates = list(self.model_directory.glob(f'*_{year}.model'))
+        if not candidates:
+            # Try searching with Regex for more flexibility
+            pattern = re.compile(rf'.*_(\d+)_{year}\.model$')
+            for model_file in self.model_directory.glob('*.model'):
+                if pattern.match(model_file.name):
+                    candidates.append(model_file)
+                    break
         
-        template_path = self.data_root / 'latent_knowledge_template.tex'
-        if not template_path.exists():
-            self.logger.warning("Template not found.")
-            return None
+        if candidates:
+            model_file = candidates[0]
+            try:
+                return Word2Vec.load(str(model_file))
+            except Exception:
+                try:
+                    return KeyedVectors.load(str(model_file))
+                except Exception:
+                    self.logger.error(f"Failed to load model {model_file}")
+        return None
+
+    def _align_vectors(self, base_model, target_model) -> np.ndarray:
+        """
+        Calcula a matriz de rotação (Orthogonal Procrustes) para alinhar o model base ao target.
+        """
+        base_wv = base_model.wv if hasattr(base_model, 'wv') else base_model
+        target_wv = target_model.wv if hasattr(target_model, 'wv') else target_model
+        
+        common_vocab = set(base_wv.key_to_index.keys()) & set(target_wv.key_to_index.keys())
+        if len(common_vocab) < 10:
+            self.logger.warning("Not enough common vocabulary for alignment.")
+            return np.eye(base_wv.vector_size)
             
-        try:
-            latex_jinja_env = jinja2.Environment(
-                block_start_string='\\BLOCK{',
-                block_end_string='}',
-                variable_start_string='\\VAR{',
-                variable_end_string='}',
-                comment_start_string='\\#{',
-                comment_end_string='}',
-                loader=jinja2.FileSystemLoader(str(self.data_root))
-            )
-            template = latex_jinja_env.get_template('latent_knowledge_template.tex')
+        common_vocab = sorted(list(common_vocab))
+        A = np.array([base_wv[w] for w in common_vocab])
+        B = np.array([target_wv[w] for w in common_vocab])
+        
+        # Orthogonal Procrustes: minimize ||A*Q - B||^2 sub Q^T*Q = I
+        M = B.T @ A
+        U, S, Vt = np.linalg.svd(M)
+        W = Vt.T @ U.T
+        return W # Matriz de transformação: Base_vector @ W ~ Target_vector
+
+    def generate_pca_trajectory_plot(self):
+        """
+        Gera um gráfico PCA 2D mostrando a trajetória dos compostos recomendados
+        relativa à doença, com alinhamento Procrustes para suavizar os saltos.
+        """
+        self.logger.info("Generating Aligned PCA trajectory plot...")
+        
+        top_compounds_data = self._get_top_compounds_from_file('score', self.target_year)
+        if not top_compounds_data:
+            self.logger.warning("No top compounds found for PCA plot.")
+            return
+        
+        compounds = [name for _, name in top_compounds_data]
+        years = sorted(list(range(self.start_year, self.target_year + 1)))
+        
+        # 1. Carregar todos os modelos
+        models_by_year = {}
+        for year in years:
+            m = self._load_model(year)
+            if m: models_by_year[year] = m
             
-            report_latex = template.render(
-                target_disease_name=self.disease_name.replace('_', ' ').title(),
-                target_year=self.target_year,
-                model_name=self.model_subfolder,
-                **plots_status
-            )
+        if not models_by_year or self.target_year not in models_by_year:
+            self.logger.error("Target year model or other models not found.")
+            return
             
-            out_file = self.reports_path / f'report_{self.model_subfolder}_{self.target_year}.tex'
-            with open(out_file, 'w', encoding='utf-8') as f:
-                f.write(report_latex)
-                
-            self.logger.info(f"Report LaTeX saved: {out_file}")
-            return out_file
+        target_model = models_by_year[self.target_year]
+        
+        # 2. Coletar e Alinhar dados
+        data_by_year = {}
+        for year, model in models_by_year.items():
+            vocab = model.wv if hasattr(model, 'wv') else model
             
-        except Exception as e:
-            self.logger.error(f"Error generating LaTeX: {e}")
-            return None
+            # Matriz de alinhamento para este ano (exceto o próprio alvo)
+            W = self._align_vectors(model, target_model) if year != self.target_year else np.eye(vocab.vector_size)
+            
+            # Embedding da doença
+            dis_vec = None
+            for variant in [self.disease_name, self.disease_name.lower(), self.disease_name.replace(' ', '_'), self.disease_name.lower().replace(' ', '_')]:
+                if variant in vocab:
+                    dis_vec = vocab[variant] @ W # Aplica rotação
+                    break
+            
+            if dis_vec is None: continue
+            
+            year_data = {}
+            # Embeddings dos compostos (ROTACIONADOS e então RELATIVOS à doença)
+            for compound in compounds:
+                for variant in [compound, compound.lower(), compound.replace(' ', '_'), compound.lower().replace(' ', '_')]:
+                    if variant in vocab:
+                        aligned_vec = vocab[variant] @ W
+                        year_data[compound] = aligned_vec - dis_vec
+                        break
+            
+            year_data["DISEASE"] = dis_vec - dis_vec # Origem (0,0)
+            data_by_year[year] = year_data
+
+        # 3. PCA e Plotagem
+        all_rel_vectors = []
+        labels_years = []
+        for year, year_data in data_by_year.items():
+            for label, vec in year_data.items():
+                all_rel_vectors.append(vec)
+                labels_years.append((year, label))
+        
+        if not all_rel_vectors: return
+
+        pca = PCA(n_components=2)
+        reduced = pca.fit_transform(np.array(all_rel_vectors))
+        
+        # Correção da Origem (visto que PCA centraliza)
+        origin_proj = pca.transform(np.zeros((1, np.array(all_rel_vectors).shape[1])))[0]
+        reduced = reduced - origin_proj
+        
+        from collections import defaultdict
+        trajectories = defaultdict(list)
+        for i, (year, label) in enumerate(labels_years):
+            trajectories[label].append((year, reduced[i]))
+            
+        fig, ax = plt.subplots(figsize=(12, 9))
+        cmap = plt.get_cmap('tab20')
+        colors = {compound: cmap(i % 20) for i, compound in enumerate(compounds)}
+        colors["DISEASE"] = "black"
+        
+        for label, points in trajectories.items():
+            points.sort(key=lambda x: x[0])
+            coords = np.array([p[1] for p in points])
+            color = colors.get(label, "grey")
+            
+            if len(coords) > 1:
+                ax.plot(coords[:, 0], coords[:, 1], linestyle=':', color=color, alpha=0.8, linewidth=1.2, zorder=2)
+
+            last_vec = coords[-1]
+            if label == "DISEASE":
+                ax.scatter(last_vec[0], last_vec[1], color='black', marker='X', s=150, label="Target Disease (Origin)", zorder=5)
+            else:
+                ax.scatter(last_vec[0], last_vec[1], color=color, marker='o', s=60, label=label, alpha=1.0, zorder=4)
+
+        ax.set_title(f"Aligned PCA Trajectory (Procrustes) relative to '{self.disease_name}'\nPeriod: {self.start_year}-{self.target_year}", fontsize=14)
+        ax.set_xlabel("PCA 1")
+        ax.set_ylabel("PCA 2")
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
+        ax.axhline(y=0, color='black', linestyle='-', alpha=0.3, linewidth=0.8)
+        ax.axvline(x=0, color='black', linestyle='-', alpha=0.3, linewidth=0.8)
+        ax.grid(True, linestyle='--', alpha=0.3)
+        plt.tight_layout()
+        
+        output_path = self.plots_path / f"pca_trajectory_relative_{self.target_year}.png"
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        self.logger.info(f"Aligned PCA plot saved: {output_path}")
 
     def run(self, max_new_topics: int = 8, max_total_topics: int = 10) -> bool:
         """Executa a geração do relatório e feedback loop."""
         self.logger.info("=== Starting Report Generation ===")
         
-        # 1. Gerar Plots
-        plots_data = self.process_plots()
+        # 1. Gerar Plots Históricos
+        self.process_plots()
+
+        # 2. Gerar Plot PCA de Trajetória
+        self.generate_pca_trajectory_plot()
         
-        # 2. Gerar lista de Tratamentos Potenciais (Salva em data/disease/potential_treatments.txt)
-        # Usa 'score' como métrica principal para sugestão
+        # 3. Gerar lista de Tratamentos Potenciais
         top_score = self._get_top_compounds_from_file('score', self.target_year)
         if top_score:
             pt_path = self.base_path / 'potential_treatments.txt'
             try:
-                with open(pt_path, 'w') as f:
+                with open(pt_path, 'w', encoding='utf-8') as f:
                     for _, name in top_score:
                         f.write(f"{name}\n")
                 self.logger.info(f"Potential treatments list updated: {pt_path}")
                 
-                # 3. Executar Feedback Loop (Atualiza topics_of_interest.txt)
+                # 4. Executar Feedback Loop
                 self.logger.info("Running feedback loop...")
                 self.feedback_new_topics(max_total_topics=max_total_topics, max_new_topics=max_new_topics)
                 
             except Exception as e:
                 self.logger.error(f"Error saving potential treatments: {e}")
         else:
-            self.logger.warning("No top compounds found by score. Skipping potential treatments generation.")
+            self.logger.warning("No top compounds found by score. Skipping feedback loop.")
 
-        # 4. Gerar Relatório LaTeX
-        if JINJA2_AVAILABLE:
-            self.generate_latex_report(plots_data)
-            
         self.logger.info("=== Report Generation Complete ===")
         return True
 

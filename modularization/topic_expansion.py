@@ -122,6 +122,7 @@ class IterativeTopicExpansion:
             report_generator = LatentKnowledgeReportGenerator(
                 disease_name=self.disease_name,
                 model_subfolder='w2v_fixed',
+                start_year=start_year,
                 target_year=current_year,
                 top_n_to_plot=20
             )
