@@ -52,11 +52,11 @@ class LLMManager:
         return self._llm
 
 def get_report_year_llm() -> Llama:
-    """Helper to get the light LLM for year extraction."""
-    # Using Qwen2.5-1.5B as it's very light and good at instruction following
+    """Helper to get the high-performance LLM for year extraction."""
+    # Using Qwen2.5-72B as it has better reasoning and can handle complex instructions
     manager = LLMManager(
-        model_repo="Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-        model_file="qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        model_repo="Qwen/Qwen2.5-72B-Instruct-GGUF",
+        model_file="qwen2.5-72b-instruct-q4_k_m.gguf",
         n_ctx=16384
     )
     return manager.get_llm()

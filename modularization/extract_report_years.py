@@ -36,28 +36,29 @@ class GroundTruthGenerator:
         Usa o LLM para verificar se o abstract indica que o composto é um tratamento.
         """
         prompt = f"""<|im_start|>system
-        You are a strict medical data curator. Your task is to validate therapeutic compounds.
-        Criteria for YES:
-        - The compound is discussed as a DIRECT treatment for the disease malignancy (killing cancer cells, tumor inhibition).
-        - Includes experimental drugs and approved treatments.
+You are a strict clinical data scientist. Your task is to extract therapeutic relationships from medical abstracts.
+Analyze the provided abstract to determine if "{compound}" is being used or investigated as a DIRECT therapeutic agent for "{self.disease}".
 
-        Criteria for NO (Strict Exclusions):
-        - SUPPORTIVE CARE: Antibiotics, Antifungals, Antiemetics, Painkillers.
-        - LAB REAGENTS: Solvents (Ethanol, DMSO), buffers.
-        - TOXICITY: Compounds mentioned only as causing the disease.
-        - NEGATIVE: The abstract explicitly states it is ineffective.
+CRITERIA FOR "YES":
+- The abstract describes "{compound}" as a treatment, drug, or therapeutic agent specifically targeting "{self.disease}".
+- It results in cancer cell death, tumor reduction, or clinical improvement in "{self.disease}".
+- Includes experimental, preclinical, or clinical investigations of the compound for this specific disease.
 
-        Answer only YES or NO.
-        <|im_end|>
-        <|im_start|>user
-        Does the following abstract indicate that {compound} is a DIRECT treatment for {self.disease_name}?
+CRITERIA FOR "NO" (STRICT EXCLUSIONS):
+- SUPPORTIVE CARE: Mentioned only for side effects, secondary infections, or general comfort (e.g., antiemetics, antibiotics, painkillers).
+- CAUSATION: Mentioned as a cause of the disease or a risk factor.
+- NEGATIVE STUDY: The abstract explicitly concludes that the compound is ineffective or purely toxic without benefit.
+- CONTEXT ONLY: Mentioned as a chemical tool or unrelated drug in the background (e.g., "The patient was previously on {compound} for an unrelated condition").
 
-        Abstract: {abstract[:10000]}
+Respond ONLY with "YES" or "NO". Do not provide reasoning.
+<|im_end|>
+<|im_start|>user
+Does this abstract indicate that {compound} is a DIRECT treatment or therapeutic candidate for {self.disease}?
 
-        [/system]
-
-        [INST]
-        """
+Abstract: {abstract}
+<|im_end|>
+<|im_start|>assistant
+"""
         
         try:
             output = self.llm.create_completion(
