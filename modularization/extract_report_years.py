@@ -37,11 +37,11 @@ class GroundTruthGenerator:
         """
         prompt = f"""<|im_start|>system
 You are a strict clinical data scientist. Your task is to extract therapeutic relationships from medical abstracts.
-Analyze the provided abstract to determine if "{compound}" is being used or investigated as a DIRECT therapeutic agent for "{self.disease}".
+Analyze the provided abstract to determine if "{compound}" is being used or investigated as a DIRECT therapeutic agent for "{self.disease_name}".
 
 CRITERIA FOR "YES":
-- The abstract describes "{compound}" as a treatment, drug, or therapeutic agent specifically targeting "{self.disease}".
-- It results in cancer cell death, tumor reduction, or clinical improvement in "{self.disease}".
+- The abstract describes "{compound}" as a treatment, drug, or therapeutic agent specifically targeting "{self.disease_name}".
+- It results in cancer cell death, tumor reduction, or clinical improvement in "{self.disease_name}".
 - Includes experimental, preclinical, or clinical investigations of the compound for this specific disease.
 
 CRITERIA FOR "NO" (STRICT EXCLUSIONS):
@@ -53,7 +53,7 @@ CRITERIA FOR "NO" (STRICT EXCLUSIONS):
 Respond ONLY with "YES" or "NO". Do not provide reasoning.
 <|im_end|>
 <|im_start|>user
-Does this abstract indicate that {compound} is a DIRECT treatment or therapeutic candidate for {self.disease}?
+Does this abstract indicate that {compound} is a DIRECT treatment or therapeutic candidate for {self.disease_name}?
 
 Abstract: {abstract}
 <|im_end|>
