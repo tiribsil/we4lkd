@@ -1,5 +1,6 @@
 import os
 import time
+import re
 from pathlib import Path
 from llama_cpp import Llama
 from huggingface_hub import hf_hub_download
@@ -24,8 +25,9 @@ class GeminiWrapper:
 
     def create_completion(self, prompt: str, **kwargs) -> dict:
         """Mimics llama-cpp-python output for compatibility or provides a simple wrapper."""
-        # Simple retry logic for transient API issues
-        max_retries = 3
+        max_retries = 5
+        base_delay = 10  # Start with 10s delay for 429
+        
         for i in range(max_retries):
             try:
                 response = self.client.models.generate_content(
@@ -42,11 +44,23 @@ class GeminiWrapper:
                     }]
                 }
             except Exception as e:
-                self.logger.warning(f"Gemini API attempt {i+1} failed: {e}")
-                if i < max_retries - 1:
-                    time.sleep(2 ** i)
+                error_str = str(e)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    # Parse retry delay if available in the error message
+                    # Example: "Please retry in 12.19956213s."
+                    retry_match = re.search(r'retry in ([\d\.]+)s', error_str)
+                    delay = float(retry_match.group(1)) + 1.0 if retry_match else base_delay * (2 ** i)
+                    
+                    self.logger.warning(f"Rate limit hit. Waiting {delay:.2f}s before retry {i+1}/{max_retries}...")
+                    time.sleep(delay)
                 else:
-                    raise e
+                    self.logger.warning(f"Gemini API attempt {i+1} failed: {e}")
+                    if i < max_retries - 1:
+                        time.sleep(2 ** i)
+                    else:
+                        raise e
+        
+        raise RuntimeError(f"Failed to get response from Gemini after {max_retries} attempts due to rate limiting.")
 
 class LLMManager:
     """Manages local GGUF models and LLM initialization."""

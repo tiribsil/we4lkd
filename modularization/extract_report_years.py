@@ -150,8 +150,8 @@ Abstract: {abstract}
                         
                         if valid_count >= threshold:
                             break
-                    # Rate limiting for cloud API (0.5s between calls to stay safe)
-                    time.sleep(0.5)
+                    # Rate limiting for cloud API (6.0s for ~10 RPM free tier)
+                    time.sleep(6.0)
                 
                 if first_year is not None:
                     year_reported[compound] = first_year
