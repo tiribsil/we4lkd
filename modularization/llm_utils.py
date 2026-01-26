@@ -3,7 +3,8 @@ import time
 from pathlib import Path
 from llama_cpp import Llama
 from huggingface_hub import hf_hub_download
-import google.generativeai as genai
+from google import genai
+from dotenv import load_dotenv
 from typing import Optional, Protocol, Any
 from utils import get_logger
 
@@ -13,11 +14,12 @@ class LLMInterface(Protocol):
 
 class GeminiWrapper:
     def __init__(self, model_name: str = "gemini-1.5-flash"):
+        load_dotenv()
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables.")
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel(model_name)
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model_name
         self.logger = get_logger(self.__class__.__name__)
 
     def create_completion(self, prompt: str, **kwargs) -> dict:
@@ -26,12 +28,13 @@ class GeminiWrapper:
         max_retries = 3
         for i in range(max_retries):
             try:
-                response = self.model.generate_content(
-                    prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        max_output_tokens=kwargs.get("max_tokens", 10),
-                        temperature=kwargs.get("temperature", 0.0),
-                    )
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config={
+                        "max_output_tokens": kwargs.get("max_tokens", 10),
+                        "temperature": kwargs.get("temperature", 0.0),
+                    }
                 )
                 return {
                     'choices': [{
