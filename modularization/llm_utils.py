@@ -13,7 +13,7 @@ class LLMInterface(Protocol):
         ...
 
 class GeminiWrapper:
-    def __init__(self, model_name: str = "gemini-1.5-flash"):
+    def __init__(self, model_name: str = "gemini-2.0-flash"):
         load_dotenv()
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
@@ -97,8 +97,8 @@ class LLMManager:
 def get_report_year_llm(use_cloud: bool = True) -> Any:
     """Helper to get the LLM for year extraction. Defaults to Gemini Cloud."""
     if use_cloud:
-        # Gemini 1.5 Flash is highly efficient for extraction
-        return GeminiWrapper(model_name="gemini-1.5-flash")
+        # Gemini 2.0 Flash is faster and more stable in the new SDK
+        return GeminiWrapper(model_name="gemini-2.0-flash")
     
     # Fallback to local 14B if explicitly requested
     manager = LLMManager(
