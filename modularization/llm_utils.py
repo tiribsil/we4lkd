@@ -5,6 +5,7 @@ from pathlib import Path
 from llama_cpp import Llama
 from huggingface_hub import hf_hub_download
 from google import genai
+from groq import Groq
 from dotenv import load_dotenv
 from typing import Optional, Protocol, Any
 from utils import get_logger
@@ -12,6 +13,49 @@ from utils import get_logger
 class LLMInterface(Protocol):
     def create_completion(self, prompt: str, **kwargs) -> Any:
         ...
+
+class GroqWrapper:
+    def __init__(self, model_name: str = "llama-3.3-70b-versatile"):
+        load_dotenv()
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY not found in environment variables.")
+        self.client = Groq(api_key=api_key)
+        self.model_name = model_name
+        self.logger = get_logger(self.__class__.__name__)
+
+    def create_completion(self, prompt: str, **kwargs) -> dict:
+        """Mimics llama-cpp-python output for compatibility."""
+        max_retries = 5
+        base_delay = 2
+        
+        for i in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=kwargs.get("max_tokens", 10),
+                    temperature=kwargs.get("temperature", 0.0),
+                )
+                return {
+                    'choices': [{
+                        'text': response.choices[0].message.content
+                    }]
+                }
+            except Exception as e:
+                error_str = str(e).upper()
+                if "429" in error_str or "RATE_LIMIT" in error_str:
+                    # Groq usually indicates retry time or we use exponential backoff
+                    delay = base_delay * (2 ** i)
+                    self.logger.warning(f"Groq Rate limit hit. Waiting {delay}s before retry {i+1}/{max_retries}...")
+                    time.sleep(delay)
+                else:
+                    self.logger.warning(f"Groq API error attempt {i+1}: {e}")
+                    if i < max_retries - 1:
+                        time.sleep(1)
+                    else:
+                        raise e
+        raise RuntimeError("Groq failed after multiple retries.")
 
 class GeminiWrapper:
     def __init__(self, model_name: str = "gemini-2.0-flash"):
@@ -108,11 +152,12 @@ class LLMManager:
             self._llm = Llama(**params)
         return self._llm
 
-def get_report_year_llm(use_cloud: bool = True) -> Any:
-    """Helper to get the LLM for year extraction. Defaults to Gemini Cloud."""
-    if use_cloud:
-        # Gemini 2.0 Flash is faster and more stable in the new SDK
-        return GeminiWrapper(model_name="gemini-2.0-flash")
+def get_report_year_llm(engine: str = "groq") -> Any:
+    """Helper to get the LLM for year extraction. engine can be 'groq', 'gemini', or 'local'."""
+    if engine == "groq":
+        return GroqWrapper()
+    elif engine == "gemini":
+        return GeminiWrapper()
     
     # Fallback to local 14B if explicitly requested
     manager = LLMManager(
