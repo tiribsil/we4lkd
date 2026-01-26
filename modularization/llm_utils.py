@@ -55,8 +55,8 @@ def get_report_year_llm() -> Llama:
     """Helper to get the high-performance LLM for year extraction."""
     # Using Qwen2.5-72B as it has better reasoning and can handle complex instructions
     manager = LLMManager(
-        model_repo="bartowski/Qwen2.5-72B-Instruct-GGUF",
-        model_file="Qwen2.5-72B-Instruct-Q4_K_M.gguf",
+        model_repo="bartowski/Qwen2.5-14B-Instruct-GGUF",
+        model_file="Qwen2.5-14B-Instruct-Q4_K_M.gguf",
         n_ctx=16384
     )
     return manager.get_llm()
