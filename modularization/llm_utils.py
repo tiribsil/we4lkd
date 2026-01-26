@@ -1,9 +1,49 @@
 import os
+import time
 from pathlib import Path
 from llama_cpp import Llama
 from huggingface_hub import hf_hub_download
-from typing import Optional
+import google.generativeai as genai
+from typing import Optional, Protocol, Any
 from utils import get_logger
+
+class LLMInterface(Protocol):
+    def create_completion(self, prompt: str, **kwargs) -> Any:
+        ...
+
+class GeminiWrapper:
+    def __init__(self, model_name: str = "gemini-1.5-flash"):
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found in environment variables.")
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel(model_name)
+        self.logger = get_logger(self.__class__.__name__)
+
+    def create_completion(self, prompt: str, **kwargs) -> dict:
+        """Mimics llama-cpp-python output for compatibility or provides a simple wrapper."""
+        # Simple retry logic for transient API issues
+        max_retries = 3
+        for i in range(max_retries):
+            try:
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        max_output_tokens=kwargs.get("max_tokens", 10),
+                        temperature=kwargs.get("temperature", 0.0),
+                    )
+                )
+                return {
+                    'choices': [{
+                        'text': response.text
+                    }]
+                }
+            except Exception as e:
+                self.logger.warning(f"Gemini API attempt {i+1} failed: {e}")
+                if i < max_retries - 1:
+                    time.sleep(2 ** i)
+                else:
+                    raise e
 
 class LLMManager:
     """Manages local GGUF models and LLM initialization."""
@@ -51,9 +91,13 @@ class LLMManager:
             self._llm = Llama(**params)
         return self._llm
 
-def get_report_year_llm() -> Llama:
-    """Helper to get the high-performance LLM for year extraction."""
-    # Using Qwen2.5-72B as it has better reasoning and can handle complex instructions
+def get_report_year_llm(use_cloud: bool = True) -> Any:
+    """Helper to get the LLM for year extraction. Defaults to Gemini Cloud."""
+    if use_cloud:
+        # Gemini 1.5 Flash is highly efficient for extraction
+        return GeminiWrapper(model_name="gemini-1.5-flash")
+    
+    # Fallback to local 14B if explicitly requested
     manager = LLMManager(
         model_repo="bartowski/Qwen2.5-14B-Instruct-GGUF",
         model_file="Qwen2.5-14B-Instruct-Q4_K_M.gguf",
