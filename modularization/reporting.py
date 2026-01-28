@@ -6,15 +6,24 @@ from datetime import date
 
 import pandas as pd
 import numpy as np
-from matplotlib import pyplot as plt
-from utils import get_logger, normalize_disease_name, LoggerFactory
-
-import pandas as pd
-import numpy as np
-from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
+from matplotlib import rcParams
 from gensim.models import Word2Vec, KeyedVectors
 from sklearn.decomposition import PCA
 from utils import get_logger, normalize_disease_name, LoggerFactory
+
+# Global Plotting Config
+plt.style.use('seaborn-v0_8-muted') # Try to use a nice style
+rcParams.update({
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'font.size': 12,
+    'axes.titlesize': 16,
+    'axes.labelsize': 12,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'legend.fontsize': 10,
+})
 
 class LatentKnowledgeReportGenerator:
     """
@@ -36,6 +45,7 @@ class LatentKnowledgeReportGenerator:
         target_year: int,     # Ano foco do relatório (geralmente o último)
         top_n_to_plot: int = 10,
         metrics_to_plot: Optional[List[str]] = None,
+        ground_truth: Optional[Dict[str, int]] = None
         ):
         
         self.logger = get_logger(self.__class__.__name__)
@@ -47,6 +57,7 @@ class LatentKnowledgeReportGenerator:
         self.target_year = target_year
         self.top_n_to_plot = top_n_to_plot
         self.metrics_to_plot = metrics_to_plot or self.DEFAULT_METRICS
+        self.ground_truth = ground_truth
         
         # --- Configurar caminhos ---
         self.base_dir = Path('./')
@@ -114,38 +125,150 @@ class LatentKnowledgeReportGenerator:
         df['year'] = pd.to_numeric(df['year'], errors='coerce')
         df = df.dropna(subset=['year']).sort_values('year')
         
-        # Plot combinado (todos os compostos no mesmo gráfico)
         fig, ax = plt.subplots(figsize=(12, 6))
         
         compounds = df['chemical_name'].unique()
         
         for compound in compounds:
             subset = df[df['chemical_name'] == compound].copy()
-
-            # Converter explicitamente para numpy arrays (evita indexing multi-dimensional em pandas)
             x = pd.to_numeric(subset['year'], errors='coerce').to_numpy()
             y = pd.to_numeric(subset.get(metric, pd.Series([])), errors='coerce').to_numpy()
 
-            # Filtrar valores inválidos
             if x.size == 0 or y.size == 0:
                 continue
             mask = ~np.isnan(x) & ~np.isnan(y)
             if not mask.any():
                 continue
 
-            ax.plot(x[mask], y[mask], marker='o', markersize=4, label=compound)
+            ax.plot(x[mask], y[mask], marker='o', markersize=4, label=compound, linewidth=1.5)
 
-        ax.set_title(f"Top {len(compounds)} Compounds: {metric} ({self.target_year})", fontsize=14)
-        ax.set_xlabel("Year")
-        ax.set_ylabel(metric)
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        ax.grid(True, alpha=0.3)
+        self._apply_aesthetic_style(
+            ax, 
+            f"Historical Context: {metric.replace('_', ' ').title()}", 
+            "Year", 
+            metric.replace('_', ' ').title()
+        )
         plt.tight_layout()
 
         output_path = metric_plot_dir / f"combined_top_{metric}_{self.target_year}.png"
-        fig.savefig(output_path, dpi=150)
+        fig.savefig(output_path)
         plt.close(fig)
         self.logger.info(f"Plot saved: {output_path}")
+
+    def generate_ranking_convergence_plot(self):
+        """Plots the ranking position of confirmed drugs over time leading to report."""
+        if not self.ground_truth:
+            self.logger.warning("No ground truth for ranking convergence plot.")
+            return
+
+        self.logger.info("Generating Ranking Convergence plot...")
+        top_list = self._get_top_compounds_from_file('score', self.target_year)
+        compounds_of_interest = [name for _, name in top_list if name in self.ground_truth]
+        
+        if not compounds_of_interest:
+            self.logger.warning("No confirmed drugs in top recommendations.")
+            return
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        for name in compounds_of_interest:
+            report_year = self.ground_truth[name]
+            fname = self._sanitize_filename(name) + ".csv"
+            fpath = self.history_path / fname
+            if not fpath.exists(): continue
+            
+            hist_df = pd.read_csv(fpath)
+            ranks = []
+            years_rel = []
+            for _, row in hist_df.iterrows():
+                yr = int(row['year'])
+                rank_dir = self.top_n_path / str(yr)
+                rank_file = list(rank_dir.glob("top_*_score.csv"))
+                if rank_file:
+                    rdf = pd.read_csv(rank_file[0])
+                    col = 'chemical_name' if 'chemical_name' in rdf.columns else 'compound_name'
+                    if name in rdf[col].values:
+                        idx = rdf[rdf[col] == name].index[0] + 1
+                        ranks.append(idx)
+                        years_rel.append(yr - report_year)
+
+            if ranks:
+                ax.plot(years_rel, ranks, marker='s', markersize=5, label=f"{name} (Report: {report_year})", alpha=0.8)
+
+        self._apply_aesthetic_style(ax, "Ranking Convergence to Literature Report", "Years relative to Report", "Rank Position")
+        ax.set_yscale('log')
+        ax.invert_yaxis()
+        from matplotlib.ticker import ScalarFormatter
+        ax.yaxis.set_major_formatter(ScalarFormatter())
+        plt.tight_layout()
+        
+        output_path = self.plots_path / f"ranking_convergence_{self.target_year}.png"
+        fig.savefig(output_path)
+        plt.close(fig)
+        self.logger.info(f"Ranking convergence plot saved: {output_path}")
+
+    def generate_lead_time_scatter_plot(self):
+        """Correlates lead time with rank in the target year."""
+        if not self.ground_truth: return
+        
+        self.logger.info("Generating Lead-Time Analysis plot...")
+        data = []
+        for name, report_year in self.ground_truth.items():
+            first_seen_year = None
+            for yr in range(self.start_year, self.target_year + 1):
+                rank_dir = self.top_n_path / str(yr)
+                rank_file = list(rank_dir.glob("top_*_score.csv"))
+                if rank_file:
+                    rdf = pd.read_csv(rank_file[0])
+                    col = 'chemical_name' if 'chemical_name' in rdf.columns else 'compound_name'
+                    if name in rdf[col].values:
+                        first_seen_year = yr
+                        break
+            
+            if first_seen_year and first_seen_year <= report_year:
+                lead_time = report_year - first_seen_year
+                rank_dir = self.top_n_path / str(self.target_year)
+                rank_file = list(rank_dir.glob("top_*_score.csv"))
+                if rank_file:
+                   rdf = pd.read_csv(rank_file[0])
+                   col = 'chemical_name' if 'chemical_name' in rdf.columns else 'compound_name'
+                   if name in rdf[col].values:
+                       target_rank = rdf[rdf[col] == name].index[0] + 1
+                       data.append({'name': name, 'lead_time': lead_time, 'rank': target_rank})
+
+        if not data: 
+            self.logger.warning("No data points for lead-time analysis.")
+            return
+
+        df = pd.DataFrame(data)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.scatter(df['lead_time'], df['rank'], alpha=0.7, edgecolors='w', s=120, zorder=3)
+        
+        if len(df) > 2:
+            z = np.polyfit(df['lead_time'], df['rank'], 1)
+            p = np.poly1d(z)
+            x_range = np.linspace(df['lead_time'].min(), df['lead_time'].max(), 100)
+            ax.plot(x_range, p(x_range), "r--", alpha=0.8, linewidth=1.5, label=f'Trendline', zorder=2)
+
+        self._apply_aesthetic_style(ax, "Discovery Lead-Time Performance", "Lead Time (Years Early)", "Target Year Rank")
+        ax.invert_yaxis()
+        plt.tight_layout()
+        
+        output_path = self.plots_path / f"lead_time_analysis_{self.target_year}.png"
+        fig.savefig(output_path)
+        plt.close(fig)
+        self.logger.info(f"Lead-time analysis plot saved: {output_path}")
+
+    def _apply_aesthetic_style(self, ax, title, xlabel, ylabel, legend=True):
+        """Aplica padrões de estética científica ao plot."""
+        ax.set_title(title, fontweight='bold', pad=20)
+        ax.set_xlabel(xlabel, labelpad=10)
+        ax.set_ylabel(ylabel, labelpad=10)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(True, linestyle='--', alpha=0.3)
+        if legend:
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False)
 
     def feedback_new_topics(self, max_new_topics: int = 8, max_total_topics: int = 10) -> None:
         """
@@ -373,25 +496,26 @@ class LatentKnowledgeReportGenerator:
             color = colors.get(label, "grey")
             
             if len(coords) > 1:
-                ax.plot(coords[:, 0], coords[:, 1], linestyle=':', color=color, alpha=0.8, linewidth=1.2, zorder=2)
+                ax.plot(coords[:, 0], coords[:, 1], linestyle=':', color=color, alpha=0.5, linewidth=1.5, zorder=2)
 
             last_vec = coords[-1]
             if label == "DISEASE":
-                ax.scatter(last_vec[0], last_vec[1], color='black', marker='X', s=150, label="Target Disease (Origin)", zorder=5)
+                ax.scatter(last_vec[0], last_vec[1], color='black', marker='X', s=200, label="Target Disease (Origin)", zorder=5)
             else:
-                ax.scatter(last_vec[0], last_vec[1], color=color, marker='o', s=60, label=label, alpha=1.0, zorder=4)
+                ax.scatter(last_vec[0], last_vec[1], color=color, marker='o', s=100, label=label, alpha=1.0, zorder=4, edgecolors='w')
 
-        ax.set_title(f"Aligned PCA Trajectory (Procrustes) relative to '{self.disease_name}'\nPeriod: {self.start_year}-{self.target_year}", fontsize=14)
-        ax.set_xlabel("PCA 1")
-        ax.set_ylabel("PCA 2")
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
-        ax.axhline(y=0, color='black', linestyle='-', alpha=0.3, linewidth=0.8)
-        ax.axvline(x=0, color='black', linestyle='-', alpha=0.3, linewidth=0.8)
-        ax.grid(True, linestyle='--', alpha=0.3)
+        self._apply_aesthetic_style(
+            ax, 
+            f"Aligned Semantic Trajectory relative to '{self.disease_name}'", 
+            "PCA Component 1", 
+            "PCA Component 2"
+        )
+        ax.axhline(y=0, color='black', linestyle='-', alpha=0.2, linewidth=0.8)
+        ax.axvline(x=0, color='black', linestyle='-', alpha=0.2, linewidth=0.8)
         plt.tight_layout()
         
         output_path = self.plots_path / f"pca_trajectory_relative_{self.target_year}.png"
-        fig.savefig(output_path, dpi=150)
+        fig.savefig(output_path)
         plt.close(fig)
         self.logger.info(f"Aligned PCA plot saved: {output_path}")
 
@@ -404,6 +528,11 @@ class LatentKnowledgeReportGenerator:
 
         # 2. Gerar Plot PCA de Trajetória
         self.generate_pca_trajectory_plot()
+
+        # 3. Gerar Novos Plots Científicos
+        if self.ground_truth:
+            self.generate_ranking_convergence_plot()
+            self.generate_lead_time_scatter_plot()
         
         # 3. Gerar lista de Tratamentos Potenciais
         top_score = self._get_top_compounds_from_file('score', self.target_year)

@@ -67,6 +67,7 @@ class ModelEvaluator:
             self.logger.info("Generating Ground Truth for evaluation...")
             gt_gen = GroundTruthGenerator(self.disease_name, self.logger)
             ground_truth = gt_gen.generate_ground_truth(threshold=3)
+            self.ground_truth = ground_truth
         
         if not ground_truth:
             self.logger.warning("No ground truth generated. Score will be 0.")
@@ -180,7 +181,11 @@ class ModelEvaluator:
 
             # 4. Cálculo de Performance (Score Final)
             self.logger.info("--- Step 3: Calculating Final Performance ---")
-            self._calculate_final_performance()
+            # Atualiza self.ground_truth se for gerado internamente
+            if not self.ground_truth:
+                self._calculate_final_performance()
+            else:
+                self._calculate_final_performance()
 
             # 5. Geração do Relatório Visual
             self.logger.info("--- Step 4: Generating Visual Report ---")
@@ -191,7 +196,8 @@ class ModelEvaluator:
                 model_subfolder=self.model_name,
                 start_year=self.test_start_year,
                 target_year=self.test_end_year, # Foca o relatório no último ano
-                top_n_to_plot=15
+                top_n_to_plot=15,
+                ground_truth=self.ground_truth
             )
             reporter.run()
 
