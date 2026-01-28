@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from embedding_training import CandidateModelTraining
@@ -53,11 +53,11 @@ class ModelEvaluator:
         else:
             raise ValueError(f"Model '{self.model_name}' not found in defined combinations.")
 
-    def compute_metrics(self) -> float:
+    def compute_metrics(self) -> Tuple[float, Dict[int, float]]:
         """Alias para _calculate_final_performance, usado pelo ModelSelector."""
         return self._calculate_final_performance()
 
-    def _calculate_final_performance(self) -> float:
+    def _calculate_final_performance(self) -> Tuple[float, Dict[int, float]]:
         """
         Calcula a métrica 'Mean Years Early' e gera estatísticas detalhadas.
         """
@@ -71,7 +71,7 @@ class ModelEvaluator:
         
         if not ground_truth:
             self.logger.warning("No ground truth generated. Score will be 0.")
-            return 0.0
+            return 0.0, {}
 
         # Encontrar primeira recomendação no período de teste
         first_recommendation = {}
@@ -142,7 +142,16 @@ class ModelEvaluator:
         details_df.to_csv(output_csv, index=False)
         self.logger.info(f"Full validation details saved to {output_csv}")
 
-        return mean_early
+        # Cálculos Anuais
+        annual_scores = {}
+        for year in range(self.test_start_year, self.test_end_year + 1):
+            year_data = details_df[details_df['recommendation_year'] == year]
+            if not year_data.empty:
+                annual_scores[year] = year_data['years_early'].mean()
+            else:
+                annual_scores[year] = 0.0
+
+        return mean_early, annual_scores
 
     def run(self) -> bool:
         """

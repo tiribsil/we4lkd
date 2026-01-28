@@ -356,7 +356,44 @@ class LatentKnowledgeReportGenerator:
             else:
                 plots_data[f'plot_{metric}'] = "Could not load histories."
 
+        # Novo: Gráfico de comparação de modelos (se disponível)
+        self.generate_model_comparison_plot()
+
         return plots_data
+
+    def generate_model_comparison_plot(self):
+        """Gera um gráfico comparando a performance anual de todos os candidatos."""
+        perf_csv = self.reports_path / "selection_performance.csv"
+        if not perf_csv.exists():
+            self.logger.warning(f"Selection performance file not found: {perf_csv}")
+            return
+
+        self.logger.info("Generating Model Comparison plot...")
+        try:
+            df = pd.read_csv(perf_csv)
+            if df.empty: return
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            for model_name in df['model_name'].unique():
+                subset = df[df['model_name'] == model_name].sort_values('year')
+                ax.plot(subset['year'], subset['years_early'], marker='o', label=model_name, linewidth=2)
+
+            self._apply_aesthetic_style(
+                ax, 
+                "Model Candidate Comparison (Annual Performance)", 
+                "Validation Year", 
+                "Average Years Early"
+            )
+            plt.tight_layout()
+
+            output_path = self.plots_path / "model_comparison_annual.png"
+            fig.savefig(output_path)
+            plt.close(fig)
+            self.logger.info(f"Model comparison plot saved: {output_path}")
+
+        except Exception as e:
+            self.logger.error(f"Error generating model comparison plot: {e}")
 
     def _load_model(self, year: int) -> Optional[object]:
         """Loads the model for a specific year."""
