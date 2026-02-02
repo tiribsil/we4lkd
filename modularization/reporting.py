@@ -271,7 +271,7 @@ class LatentKnowledgeReportGenerator:
         self.logger.info("Generating Discovery Timeline plot...")
         
         # 1. Identify high-lead-time candidates
-        # We look for drugs where (Report Year - First Rank Year) is high
+        # Align logic with ModelEvaluator._calculate_final_performance
         candidates = []
         for name, report_year in self.ground_truth.items():
             # ONLY show compounds reported within THIS specific evaluation period
@@ -290,9 +290,9 @@ class LatentKnowledgeReportGenerator:
                         first_rank_year = yr
                         break
             
-            if first_rank_year and report_year > first_rank_year:
+            if first_rank_year:
+                # Calculate lead time (years early)
                 lead_time = report_year - first_rank_year
-                # We prioritize those that "stabilized" or were detected early
                 candidates.append({
                     'name': name, 
                     'lead_time': lead_time, 
@@ -300,7 +300,7 @@ class LatentKnowledgeReportGenerator:
                     'first_year': first_rank_year
                 })
 
-        # Sort by lead time (descending) and take top N
+        # Sort by lead time (descending) like Top 5 Biggest Anticipations
         candidates = sorted(candidates, key=lambda x: x['lead_time'], reverse=True)[:max_compounds]
         
         if not candidates:
@@ -487,7 +487,10 @@ class LatentKnowledgeReportGenerator:
             
             for model_name in df['model_name'].unique():
                 subset = df[df['model_name'] == model_name].sort_values('year')
-                ax.plot(subset['year'], subset['years_early'], marker='o', label=model_name, linewidth=2)
+                # Ensure we pass numpy arrays to avoid indexing errors if pandas versions are tricky
+                yrs = subset['year'].to_numpy()
+                vals = subset['years_early'].to_numpy()
+                ax.plot(yrs, vals, marker='o', label=model_name, linewidth=2)
 
             self._apply_aesthetic_style(
                 ax, 
