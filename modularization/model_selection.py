@@ -94,7 +94,8 @@ class ModelSelector:
                 corpus_start_year=self.corpus_start_year,
                 test_start_year=self.start_year,
                 test_end_year=self.end_year,
-                ground_truth=ground_truth
+                ground_truth=ground_truth,
+                models=self.models
             )
             score, annual_scores = evaluator.compute_metrics()
             model_scores[model_name] = score

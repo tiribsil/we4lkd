@@ -7,7 +7,7 @@ from embedding_training import CandidateModelTraining
 from metric_generation import ValidationModule
 from reporting import LatentKnowledgeReportGenerator
 from extract_report_years import GroundTruthGenerator
-from utils import get_logger, normalize_disease_name
+from utils import get_logger, normalize_disease_name, _load_checkpoint
 
 class ModelEvaluator:
     """
@@ -23,7 +23,8 @@ class ModelEvaluator:
         corpus_start_year: int, 
         test_start_year: int, 
         test_end_year: int,
-        ground_truth: Optional[Dict[str, int]] = None
+        ground_truth: Optional[Dict[str, int]] = None,
+        models: Optional[Dict[str, List]] = None
     ):
         self.disease_name = disease_name
         self.normalized_disease_name = normalize_disease_name(disease_name)
@@ -45,6 +46,16 @@ class ModelEvaluator:
             start_year=corpus_start_year,
             end_year=test_end_year
         )
+
+        # Carrega combinações de modelos
+        if models:
+            self.trainer.model_combinations.update(models)
+        else:
+            # Fallback: tentar carregar do checkpoint se não for fornecido
+            checkpoint = _load_checkpoint(self.normalized_disease_name)
+            if checkpoint and "trained_models_info" in checkpoint:
+                self.trainer.model_combinations.update(checkpoint["trained_models_info"])
+                self.logger.info(f"Loaded {len(checkpoint['trained_models_info'])} models from checkpoint.")
 
     def _get_model_params(self) -> List[any]:
         """Recupera os hiperparâmetros do modelo selecionado (ex: w2v_comb2)."""

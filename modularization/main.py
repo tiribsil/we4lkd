@@ -200,7 +200,8 @@ def run_full_pipeline(disease_name: str, max_topics: int, max_new_topics: int, t
             best_model, 
             model_dev_start_year, 
             test_start_year, 
-            test_end_year
+            test_end_year,
+            models=models
         )
         
         # --------------------------------------------------------------------------------
