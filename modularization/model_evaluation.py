@@ -217,7 +217,8 @@ class ModelEvaluator:
                 start_year=self.test_start_year,
                 target_year=self.test_end_year, # Foca o relatório no último ano
                 top_n_to_plot=15,
-                ground_truth=self.ground_truth
+                ground_truth=self.ground_truth,
+                corpus_start_year=self.corpus_start_year
             )
             reporter.run()
 

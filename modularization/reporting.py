@@ -45,7 +45,8 @@ class LatentKnowledgeReportGenerator:
         target_year: int,     # Ano foco do relatório (geralmente o último)
         top_n_to_plot: int = 10,
         metrics_to_plot: Optional[List[str]] = None,
-        ground_truth: Optional[Dict[str, int]] = None
+        ground_truth: Optional[Dict[str, int]] = None,
+        corpus_start_year: Optional[int] = None
         ):
         
         self.logger = get_logger(self.__class__.__name__)
@@ -58,6 +59,7 @@ class LatentKnowledgeReportGenerator:
         self.top_n_to_plot = top_n_to_plot
         self.metrics_to_plot = metrics_to_plot or self.DEFAULT_METRICS
         self.ground_truth = ground_truth
+        self.corpus_start_year = corpus_start_year or start_year
         
         # --- Configurar caminhos ---
         self.base_dir = Path('./')
@@ -272,9 +274,13 @@ class LatentKnowledgeReportGenerator:
         # We look for drugs where (Report Year - First Rank Year) is high
         candidates = []
         for name, report_year in self.ground_truth.items():
+            # ONLY show compounds reported within THIS specific evaluation period
+            if not (self.start_year <= report_year <= self.target_year):
+                continue
+
             first_rank_year = None
-            # Search from the start of the corpus to see when the model first "ranked" it
-            for yr in range(self.start_year, self.target_year + 1):
+            # Search from the CORPUS start to see the TRUE first discovery
+            for yr in range(self.corpus_start_year, self.target_year + 1):
                 rank_dir = self.top_n_path / str(yr)
                 rank_file = list(rank_dir.glob("top_*_score.csv"))
                 if rank_file:
