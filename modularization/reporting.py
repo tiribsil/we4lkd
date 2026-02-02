@@ -274,8 +274,8 @@ class LatentKnowledgeReportGenerator:
         # Align logic with ModelEvaluator._calculate_final_performance
         candidates = []
         for name, report_year in self.ground_truth.items():
-            # ONLY show compounds reported within THIS specific evaluation period
-            if not (self.start_year <= report_year <= self.target_year):
+            # Filter out compounds reported BEFORE this period (already known)
+            if report_year < self.start_year:
                 continue
 
             first_rank_year = None
@@ -337,14 +337,22 @@ class LatentKnowledgeReportGenerator:
             if plot_years:
                 line, = ax.plot(plot_years, ranks, marker='o', markersize=4, label=f"{name}", alpha=0.9, linewidth=2)
                 
-                # Add "Report Year" marker if it falls within our plotting range or just after
+                # Add "Report Year" marker
                 if report_year <= self.target_year:
-                    # Find rank at report year or last known rank
-                    last_rank = ranks[-1]
-                    ax.scatter([report_year], [last_rank], color=line.get_color(), marker='*', s=200, edgecolors='black', zorder=5)
-                    ax.annotate(f"Reported {report_year}", (report_year, last_rank), 
+                    # Case 1: Reported within the plotting period
+                    ax.scatter([report_year], [ranks[plot_years.index(report_year)] if report_year in plot_years else ranks[-1]], 
+                               color=line.get_color(), marker='*', s=200, edgecolors='black', zorder=5)
+                    ax.annotate(f"Reported {report_year}", (report_year, ranks[plot_years.index(report_year)] if report_year in plot_years else ranks[-1]), 
                                 textcoords="offset points", xytext=(0,10), ha='center', 
                                 fontsize=9, fontweight='bold', color=line.get_color())
+                else:
+                    # Case 2: Reported after the plotting period
+                    last_year = plot_years[-1]
+                    last_rank = ranks[-1]
+                    ax.annotate(f"→ Reported {report_year}", (last_year, last_rank), 
+                                textcoords="offset points", xytext=(10,0), va='center', ha='left',
+                                fontsize=9, fontweight='bold', color=line.get_color(),
+                                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=line.get_color(), alpha=0.8))
 
         # Aesthetics
         self._apply_aesthetic_style(
