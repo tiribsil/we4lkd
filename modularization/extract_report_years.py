@@ -139,30 +139,21 @@ Abstract: {abstract}
 
                 valid_count = 0
                 first_year = None
-                first_id = None
+                first_abstract = None
                 
                 # Check abstracts in chronological order
-                for idx, row in eligible_abstracts.iterrows():
+                for _, row in eligible_abstracts.iterrows():
                     if self._verify_with_llm(compound, row['summary']):
                         valid_count += 1
                         if first_year is None:
                             first_year = int(row['year_extracted'])
-                            # Identifica o ID do abstract (PMID ou similar)
-                            # Se não houver coluna de ID, usa o índice original do DataFrame
-                            possible_id_cols = ['pmid', 'id', 'pubmed_id', 'PMID', 'ID']
-                            found_id = None
-                            for col in possible_id_cols:
-                                if col in row:
-                                    found_id = row[col]
-                                    break
-                            
-                            first_id = found_id if found_id is not None else idx
+                            first_abstract = row['summary']
                         
                         if valid_count >= threshold:
                             break
                 
                 if first_year is not None:
-                    year_reported[compound] = (first_year, first_id)
+                    year_reported[compound] = (first_year, first_abstract)
                     
             except Exception as e:
                 self.logger.error(f"Error processing {compound}: {e}")
@@ -172,10 +163,10 @@ Abstract: {abstract}
 
         # 3. Salvar no cache
         try:
-            # year_reported agora é {composto: (ano, id)}
+            # year_reported agora é {composto: (ano, abstract)}
             data_out = []
-            for comp, (yr, aid) in year_reported.items():
-                data_out.append({'compound': comp, 'year': yr, 'abstract_id': aid})
+            for comp, (yr, abs_text) in year_reported.items():
+                data_out.append({'compound': comp, 'year': yr, 'abstract_evidence': abs_text})
             
             df_out = pd.DataFrame(data_out)
             df_out.to_csv(cache_file, index=False)
