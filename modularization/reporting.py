@@ -13,7 +13,7 @@ from sklearn.decomposition import PCA
 from utils import get_logger, normalize_disease_name, LoggerFactory
 
 # Global Plotting Config
-plt.style.use('seaborn-v0_8-muted') # Try to use a nice style
+plt.style.use('seaborn-muted') # Try to use a nice style
 rcParams.update({
     'figure.dpi': 300,
     'savefig.dpi': 300,
