@@ -259,6 +259,110 @@ class LatentKnowledgeReportGenerator:
         plt.close(fig)
         self.logger.info(f"Lead-time analysis plot saved: {output_path}")
 
+    def generate_discovery_timeline_plot(self, max_compounds: int = 5):
+        """
+        Plots the ranking evolution over absolute years for high-lead-time compounds.
+        Focuses on discoveries made during model development/selection (up to selection_end_year).
+        """
+        if not self.ground_truth: return
+        
+        self.logger.info("Generating Discovery Timeline plot...")
+        
+        # 1. Identify high-lead-time candidates
+        # We look for drugs where (Report Year - First Rank Year) is high
+        candidates = []
+        for name, report_year in self.ground_truth.items():
+            first_rank_year = None
+            # Search from the start of the corpus to see when the model first "ranked" it
+            for yr in range(self.start_year, self.target_year + 1):
+                rank_dir = self.top_n_path / str(yr)
+                rank_file = list(rank_dir.glob("top_*_score.csv"))
+                if rank_file:
+                    rdf = pd.read_csv(rank_file[0])
+                    col = 'chemical_name' if 'chemical_name' in rdf.columns else 'compound_name'
+                    if name in rdf[col].values:
+                        first_rank_year = yr
+                        break
+            
+            if first_rank_year and report_year > first_rank_year:
+                lead_time = report_year - first_rank_year
+                # We prioritize those that "stabilized" or were detected early
+                candidates.append({
+                    'name': name, 
+                    'lead_time': lead_time, 
+                    'report_year': report_year,
+                    'first_year': first_rank_year
+                })
+
+        # Sort by lead time (descending) and take top N
+        candidates = sorted(candidates, key=lambda x: x['lead_time'], reverse=True)[:max_compounds]
+        
+        if not candidates:
+            self.logger.warning("No suitable candidates for discovery timeline plot.")
+            return
+
+        fig, ax = plt.subplots(figsize=(12, 7))
+        
+        for cand in candidates:
+            name = cand['name']
+            report_year = cand['report_year']
+            
+            # Fetch ranking history
+            fname = self._sanitize_filename(name) + ".csv"
+            fpath = self.history_path / fname
+            if not fpath.exists(): continue
+            
+            # Instead of using the history CSV (which might not have ranks), 
+            # we iterate through the top_n folders to get consistent ranking data
+            ranks = []
+            plot_years = []
+            
+            for yr in range(self.start_year, self.target_year + 1):
+                rank_dir = self.top_n_path / str(yr)
+                rank_file = list(rank_dir.glob("top_*_score.csv"))
+                if rank_file:
+                    rdf = pd.read_csv(rank_file[0])
+                    col = 'chemical_name' if 'chemical_name' in rdf.columns else 'compound_name'
+                    if name in rdf[col].values:
+                        idx = rdf[rdf[col] == name].index[0] + 1
+                        ranks.append(idx)
+                        plot_years.append(yr)
+
+            if plot_years:
+                line, = ax.plot(plot_years, ranks, marker='o', markersize=4, label=f"{name}", alpha=0.9, linewidth=2)
+                
+                # Add "Report Year" marker if it falls within our plotting range or just after
+                if report_year <= self.target_year:
+                    # Find rank at report year or last known rank
+                    last_rank = ranks[-1]
+                    ax.scatter([report_year], [last_rank], color=line.get_color(), marker='*', s=200, edgecolors='black', zorder=5)
+                    ax.annotate(f"Reported {report_year}", (report_year, last_rank), 
+                                textcoords="offset points", xytext=(0,10), ha='center', 
+                                fontsize=9, fontweight='bold', color=line.get_color())
+
+        # Aesthetics
+        self._apply_aesthetic_style(
+            ax, 
+            "Discovery Timeline: Latent Knowledge to Literature Report", 
+            "Year", 
+            "Ranking Position"
+        )
+        ax.set_yscale('log')
+        ax.invert_yaxis()
+        from matplotlib.ticker import ScalarFormatter
+        ax.yaxis.set_major_formatter(ScalarFormatter())
+        
+        # Add a "Selection Period" span if we have the info (hardcoded or passed)
+        # Based on user-provided cat: 2005-2016
+        ax.axvspan(2005, 2016, color='gray', alpha=0.1, label='Model Selection Period')
+        
+        plt.tight_layout()
+        
+        output_path = self.plots_path / f"discovery_timeline_{self.target_year}.png"
+        fig.savefig(output_path)
+        plt.close(fig)
+        self.logger.info(f"Discovery timeline plot saved: {output_path}")
+
     def _apply_aesthetic_style(self, ax, title, xlabel, ylabel, legend=True):
         """Aplica padrões de estética científica ao plot."""
         ax.set_title(title, fontweight='bold', pad=20)
@@ -570,6 +674,7 @@ class LatentKnowledgeReportGenerator:
         if self.ground_truth:
             self.generate_ranking_convergence_plot()
             self.generate_lead_time_scatter_plot()
+            self.generate_discovery_timeline_plot()
         
         # 3. Gerar lista de Tratamentos Potenciais
         top_score = self._get_top_compounds_from_file('score', self.target_year)
