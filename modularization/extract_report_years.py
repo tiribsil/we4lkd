@@ -36,28 +36,29 @@ class GroundTruthGenerator:
         Usa o LLM para verificar se o abstract indica que o composto é um tratamento.
         """
         prompt = f"""<|im_start|>system
-        You are a strict medical data curator. Your task is to validate therapeutic compounds.
-        Criteria for YES:
-        - The compound is discussed as a DIRECT treatment for the disease malignancy (killing cancer cells, tumor inhibition).
-        - Includes experimental drugs and approved treatments.
+You are a strict clinical data scientist. Your task is to extract therapeutic relationships from medical abstracts.
+Analyze the provided abstract to determine if "{compound}" is being used or investigated as a DIRECT therapeutic agent for "{self.disease_name}".
 
-        Criteria for NO (Strict Exclusions):
-        - SUPPORTIVE CARE: Antibiotics, Antifungals, Antiemetics, Painkillers.
-        - LAB REAGENTS: Solvents (Ethanol, DMSO), buffers.
-        - TOXICITY: Compounds mentioned only as causing the disease.
-        - NEGATIVE: The abstract explicitly states it is ineffective.
+CRITERIA FOR "YES":
+- The abstract describes "{compound}" as a treatment, drug, or therapeutic agent specifically targeting "{self.disease_name}".
+- It results in cancer cell death, tumor reduction, or clinical improvement in "{self.disease_name}".
+- Includes experimental, preclinical, or clinical investigations of the compound for this specific disease.
 
-        Answer only YES or NO.
-        <|im_end|>
-        <|im_start|>user
-        Does the following abstract indicate that {compound} is a DIRECT treatment for {self.disease_name}?
+CRITERIA FOR "NO" (STRICT EXCLUSIONS):
+- SUPPORTIVE CARE: Mentioned only for side effects, secondary infections, or general comfort (e.g., antiemetics, antibiotics, painkillers).
+- CAUSATION: Mentioned as a cause of the disease or a risk factor.
+- NEGATIVE STUDY: The abstract explicitly concludes that the compound is ineffective or purely toxic without benefit.
+- CONTEXT ONLY: Mentioned as a chemical tool or unrelated drug in the background (e.g., "The patient was previously on {compound} for an unrelated condition").
 
-        Abstract: {abstract[:10000]}
+Respond ONLY with "YES" or "NO". Do not provide reasoning.
+<|im_end|>
+<|im_start|>user
+Does this abstract indicate that {compound} is a DIRECT treatment or therapeutic candidate for {self.disease_name}?
 
-        [/system]
-
-        [INST]
-        """
+Abstract: {abstract}
+<|im_end|>
+<|im_start|>assistant
+"""
         
         try:
             output = self.llm.create_completion(
@@ -138,6 +139,7 @@ class GroundTruthGenerator:
 
                 valid_count = 0
                 first_year = None
+                first_abstract = None
                 
                 # Check abstracts in chronological order
                 for _, row in eligible_abstracts.iterrows():
@@ -145,12 +147,13 @@ class GroundTruthGenerator:
                         valid_count += 1
                         if first_year is None:
                             first_year = int(row['year_extracted'])
+                            first_abstract = row['summary']
                         
                         if valid_count >= threshold:
                             break
                 
                 if first_year is not None:
-                    year_reported[compound] = first_year
+                    year_reported[compound] = (first_year, first_abstract)
                     
             except Exception as e:
                 self.logger.error(f"Error processing {compound}: {e}")
@@ -160,10 +163,16 @@ class GroundTruthGenerator:
 
         # 3. Salvar no cache
         try:
-            df_out = pd.DataFrame(list(year_reported.items()), columns=['compound', 'year'])
+            # year_reported agora é {composto: (ano, abstract)}
+            data_out = []
+            for comp, (yr, abs_text) in year_reported.items():
+                data_out.append({'compound': comp, 'year': yr, 'abstract_evidence': abs_text})
+            
+            df_out = pd.DataFrame(data_out)
             df_out.to_csv(cache_file, index=False)
             self.logger.info(f"Ground Truth saved to cache: {cache_file}")
         except Exception as e:
             self.logger.error(f"Could not save cache: {e}")
 
-        return year_reported
+        # Retorna o formato original {composto: ano} para compatibilidade
+        return {comp: yr for comp, (yr, _) in year_reported.items()}

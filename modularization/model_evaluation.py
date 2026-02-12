@@ -1,13 +1,13 @@
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from embedding_training import CandidateModelTraining
 from metric_generation import ValidationModule
 from reporting import LatentKnowledgeReportGenerator
 from extract_report_years import GroundTruthGenerator
-from utils import get_logger, normalize_disease_name
+from utils import get_logger, normalize_disease_name, _load_checkpoint
 
 class ModelEvaluator:
     """
@@ -23,7 +23,8 @@ class ModelEvaluator:
         corpus_start_year: int, 
         test_start_year: int, 
         test_end_year: int,
-        ground_truth: Optional[Dict[str, int]] = None
+        ground_truth: Optional[Dict[str, int]] = None,
+        models: Optional[Dict[str, List]] = None
     ):
         self.disease_name = disease_name
         self.normalized_disease_name = normalize_disease_name(disease_name)
@@ -46,6 +47,16 @@ class ModelEvaluator:
             end_year=test_end_year
         )
 
+        # Carrega combinações de modelos
+        if models:
+            self.trainer.model_combinations.update(models)
+        else:
+            # Fallback: tentar carregar do checkpoint se não for fornecido
+            checkpoint = _load_checkpoint(self.normalized_disease_name)
+            if checkpoint and "trained_models_info" in checkpoint:
+                self.trainer.model_combinations.update(checkpoint["trained_models_info"])
+                self.logger.info(f"Loaded {len(checkpoint['trained_models_info'])} models from checkpoint.")
+
     def _get_model_params(self) -> List[any]:
         """Recupera os hiperparâmetros do modelo selecionado (ex: w2v_comb2)."""
         if self.model_name in self.trainer.model_combinations:
@@ -53,11 +64,11 @@ class ModelEvaluator:
         else:
             raise ValueError(f"Model '{self.model_name}' not found in defined combinations.")
 
-    def compute_metrics(self) -> float:
+    def compute_metrics(self) -> Tuple[float, Dict[int, float]]:
         """Alias para _calculate_final_performance, usado pelo ModelSelector."""
         return self._calculate_final_performance()
 
-    def _calculate_final_performance(self) -> float:
+    def _calculate_final_performance(self) -> Tuple[float, Dict[int, float]]:
         """
         Calcula a métrica 'Mean Years Early' e gera estatísticas detalhadas.
         """
@@ -67,10 +78,11 @@ class ModelEvaluator:
             self.logger.info("Generating Ground Truth for evaluation...")
             gt_gen = GroundTruthGenerator(self.disease_name, self.logger)
             ground_truth = gt_gen.generate_ground_truth(threshold=3)
+            self.ground_truth = ground_truth
         
         if not ground_truth:
             self.logger.warning("No ground truth generated. Score will be 0.")
-            return 0.0
+            return 0.0, {}
 
         # Encontrar primeira recomendação no período de teste
         first_recommendation = {}
@@ -141,7 +153,16 @@ class ModelEvaluator:
         details_df.to_csv(output_csv, index=False)
         self.logger.info(f"Full validation details saved to {output_csv}")
 
-        return mean_early
+        # Cálculos Anuais
+        annual_scores = {}
+        for year in range(self.test_start_year, self.test_end_year + 1):
+            year_data = details_df[details_df['recommendation_year'] == year]
+            if not year_data.empty:
+                annual_scores[year] = year_data['years_early'].mean()
+            else:
+                annual_scores[year] = 0.0
+
+        return mean_early, annual_scores
 
     def run(self) -> bool:
         """
@@ -180,7 +201,11 @@ class ModelEvaluator:
 
             # 4. Cálculo de Performance (Score Final)
             self.logger.info("--- Step 3: Calculating Final Performance ---")
-            self._calculate_final_performance()
+            # Atualiza self.ground_truth se for gerado internamente
+            if not self.ground_truth:
+                self._calculate_final_performance()
+            else:
+                self._calculate_final_performance()
 
             # 5. Geração do Relatório Visual
             self.logger.info("--- Step 4: Generating Visual Report ---")
@@ -191,7 +216,9 @@ class ModelEvaluator:
                 model_subfolder=self.model_name,
                 start_year=self.test_start_year,
                 target_year=self.test_end_year, # Foca o relatório no último ano
-                top_n_to_plot=15
+                top_n_to_plot=15,
+                ground_truth=self.ground_truth,
+                corpus_start_year=self.corpus_start_year
             )
             reporter.run()
 

@@ -54,6 +54,7 @@ class ModelSelector:
             return list(self.models.keys())[0]
 
         model_scores = {}
+        all_annual_data = []
 
         # 2. Loop de Candidatos
         for model_name, params in self.models.items():
@@ -93,10 +94,19 @@ class ModelSelector:
                 corpus_start_year=self.corpus_start_year,
                 test_start_year=self.start_year,
                 test_end_year=self.end_year,
-                ground_truth=ground_truth
+                ground_truth=ground_truth,
+                models=self.models
             )
-            score = evaluator.compute_metrics()
+            score, annual_scores = evaluator.compute_metrics()
             model_scores[model_name] = score
+            
+            # Adicionar ao log anual para plotting
+            for yr, s in annual_scores.items():
+                all_annual_data.append({
+                    'model_name': model_name,
+                    'year': yr,
+                    'years_early': s
+                })
             
             self.logger.info(f"Candidate {model_name} Score: {score:.2f}")
 
@@ -109,5 +119,13 @@ class ModelSelector:
         best_score = model_scores[best_model]
 
         self.logger.info(f"Best: {best_model} ({best_score:.2f})")
+
+        # Salvar performance anual para relatório
+        if all_annual_data:
+            perf_df = pd.DataFrame(all_annual_data)
+            perf_csv = self.base_path / "reports" / "selection_performance.csv"
+            perf_csv.parent.mkdir(parents=True, exist_ok=True)
+            perf_df.to_csv(perf_csv, index=False)
+            self.logger.info(f"Selection performance saved to {perf_csv}")
 
         return best_model
