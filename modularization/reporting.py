@@ -386,7 +386,7 @@ class LatentKnowledgeReportGenerator:
         ax.spines['right'].set_visible(False)
         ax.grid(True, linestyle='--', alpha=0.3)
         if legend:
-            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False, fontsize='medium')
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False, fontsize=16)
 
     def feedback_new_topics(self, max_new_topics: int = 8, max_total_topics: int = 10) -> None:
         """
@@ -643,7 +643,7 @@ class LatentKnowledgeReportGenerator:
         for i, (year, label) in enumerate(labels_years):
             trajectories[label].append((year, reduced[i]))
             
-        fig, ax = plt.subplots(figsize=(16, 9))
+        fig, ax = plt.subplots(figsize=(14, 9))
         cmap = plt.get_cmap('tab20')
         colors = {compound: cmap(i % 20) for i, compound in enumerate(compounds)}
         colors["DISEASE"] = "black"
