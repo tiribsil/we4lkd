@@ -654,7 +654,7 @@ class LatentKnowledgeReportGenerator:
             color = colors.get(label, "grey")
             
             if len(coords) > 1:
-                ax.plot(coords[:, 0], coords[:, 1], linestyle=':', color=color, alpha=0.5, linewidth=1.5, zorder=2)
+                ax.plot(coords[:, 0], coords[:, 1], linestyle=':', color=color, alpha=0.75, linewidth=2.25, zorder=2)
 
             last_vec = coords[-1]
             if label == "DISEASE":
