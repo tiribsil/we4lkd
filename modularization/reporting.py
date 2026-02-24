@@ -15,14 +15,14 @@ from utils import get_logger, normalize_disease_name, LoggerFactory
 # Global Plotting Config
 plt.style.use('seaborn-muted') # Try to use a nice style
 rcParams.update({
-    'figure.dpi': 300,
-    'savefig.dpi': 300,
-    'font.size': 12,
-    'axes.titlesize': 16,
-    'axes.labelsize': 12,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'legend.fontsize': 10,
+    'figure.dpi': 600,
+    'savefig.dpi': 600,
+    'font.size': 14,
+    'axes.titlesize': 18,
+    'axes.labelsize': 14,
+    'xtick.labelsize': 12,
+    'ytick.labelsize': 12,
+    'legend.fontsize': 12,
 })
 
 class LatentKnowledgeReportGenerator:
@@ -152,7 +152,7 @@ class LatentKnowledgeReportGenerator:
         )
         plt.tight_layout()
 
-        output_path = metric_plot_dir / f"combined_top_{metric}_{self.target_year}.png"
+        output_path = metric_plot_dir / f"combined_top_{metric}_{self.target_year}.pdf"
         fig.savefig(output_path)
         plt.close(fig)
         self.logger.info(f"Plot saved: {output_path}")
@@ -204,7 +204,7 @@ class LatentKnowledgeReportGenerator:
         ax.yaxis.set_major_formatter(ScalarFormatter())
         plt.tight_layout()
         
-        output_path = self.plots_path / f"ranking_convergence_{self.target_year}.png"
+        output_path = self.plots_path / f"ranking_convergence_{self.target_year}.pdf"
         fig.savefig(output_path)
         plt.close(fig)
         self.logger.info(f"Ranking convergence plot saved: {output_path}")
@@ -256,7 +256,7 @@ class LatentKnowledgeReportGenerator:
         ax.invert_yaxis()
         plt.tight_layout()
         
-        output_path = self.plots_path / f"lead_time_analysis_{self.target_year}.png"
+        output_path = self.plots_path / f"lead_time_analysis_{self.target_year}.pdf"
         fig.savefig(output_path)
         plt.close(fig)
         self.logger.info(f"Lead-time analysis plot saved: {output_path}")
@@ -372,7 +372,7 @@ class LatentKnowledgeReportGenerator:
         
         plt.tight_layout()
         
-        output_path = self.plots_path / f"discovery_timeline_{self.target_year}.png"
+        output_path = self.plots_path / f"discovery_timeline_{self.target_year}.pdf"
         fig.savefig(output_path)
         plt.close(fig)
         self.logger.info(f"Discovery timeline plot saved: {output_path}")
@@ -386,7 +386,7 @@ class LatentKnowledgeReportGenerator:
         ax.spines['right'].set_visible(False)
         ax.grid(True, linestyle='--', alpha=0.3)
         if legend:
-            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False)
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False, fontsize='medium')
 
     def feedback_new_topics(self, max_new_topics: int = 8, max_total_topics: int = 10) -> None:
         """
@@ -508,7 +508,7 @@ class LatentKnowledgeReportGenerator:
             )
             plt.tight_layout()
 
-            output_path = self.plots_path / "model_comparison_annual.png"
+            output_path = self.plots_path / "model_comparison_annual.pdf"
             fig.savefig(output_path)
             plt.close(fig)
             self.logger.info(f"Model comparison plot saved: {output_path}")
@@ -643,7 +643,7 @@ class LatentKnowledgeReportGenerator:
         for i, (year, label) in enumerate(labels_years):
             trajectories[label].append((year, reduced[i]))
             
-        fig, ax = plt.subplots(figsize=(12, 9))
+        fig, ax = plt.subplots(figsize=(16, 9))
         cmap = plt.get_cmap('tab20')
         colors = {compound: cmap(i % 20) for i, compound in enumerate(compounds)}
         colors["DISEASE"] = "black"
@@ -660,7 +660,7 @@ class LatentKnowledgeReportGenerator:
             if label == "DISEASE":
                 ax.scatter(last_vec[0], last_vec[1], color='black', marker='X', s=200, label="Target Disease (Origin)", zorder=5)
             else:
-                ax.scatter(last_vec[0], last_vec[1], color=color, marker='o', s=100, label=label, alpha=1.0, zorder=4, edgecolors='w')
+                ax.scatter(last_vec[0], last_vec[1], color=color, marker='o', s=150, label=label, alpha=1.0, zorder=4, edgecolors='w')
 
         self._apply_aesthetic_style(
             ax, 
@@ -672,7 +672,7 @@ class LatentKnowledgeReportGenerator:
         ax.axvline(x=0, color='black', linestyle='-', alpha=0.2, linewidth=0.8)
         plt.tight_layout()
         
-        output_path = self.plots_path / f"pca_trajectory_relative_{self.target_year}.png"
+        output_path = self.plots_path / f"pca_trajectory_relative_{self.target_year}.pdf"
         fig.savefig(output_path)
         plt.close(fig)
         self.logger.info(f"Aligned PCA plot saved: {output_path}")
