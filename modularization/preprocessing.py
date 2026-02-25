@@ -624,7 +624,12 @@ class Preprocessing:
             df_combined = df_new_spark
         
         # Save to a temporary directory
-        df_combined.coalesce(1).write.mode('overwrite').option("header", "true").csv(str(temp_dir))
+        df_combined.coalesce(1).write.mode('overwrite') \
+            .option("header", "true") \
+            .option("quote", "\"") \
+            .option("escape", "\"") \
+            .option("quoteAll", "true") \
+            .csv(str(temp_dir))
         
         # Find the part-file and move it, overwriting the old main file
         try:
@@ -727,7 +732,12 @@ class Preprocessing:
         if temp_output_dir.exists():
             shutil.rmtree(temp_output_dir)
 
-        df_clean_spark.coalesce(1).write.mode('overwrite').option("header", "true").csv(str(temp_output_dir))
+        df_clean_spark.coalesce(1).write.mode('overwrite') \
+            .option("header", "true") \
+            .option("quote", "\"") \
+            .option("escape", "\"") \
+            .option("quoteAll", "true") \
+            .csv(str(temp_output_dir))
 
         # Find the part-file and move it
         try:
