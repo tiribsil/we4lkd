@@ -222,7 +222,9 @@ class CandidateModelTraining:
                         if len(parts) == 2:
                             raw_data.append({'summary': parts[0].strip().strip('"'), 'year_extracted': parts[1].strip()})
                 if raw_data:
-                    all_dfs.append(pd.DataFrame(raw_data))
+                    df_fallback = pd.DataFrame(raw_data)
+                    df_fallback['year_extracted'] = pd.to_numeric(df_fallback['year_extracted'], errors='coerce')
+                    all_dfs.append(df_fallback)
 
         if not all_dfs: return None
         df = pd.concat(all_dfs, ignore_index=True)

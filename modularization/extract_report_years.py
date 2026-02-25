@@ -92,7 +92,7 @@ Abstract: {abstract}
                 all_dfs.append(pd.read_csv(path))
             except Exception:
                 self.logger.warning(f"Standard read failed for {path.name}. Using rsplit fallback.")
-                data = []
+                raw_data = []
                 with open(path, 'r', encoding='utf-8') as f:
                     f.readline() # Skip header
                     for line in f:
@@ -100,7 +100,14 @@ Abstract: {abstract}
                         if not line: continue
                         parts = line.rsplit(',', 1)
                         if len(parts) == 2:
-                            all_dfs.append(pd.DataFrame([{'summary': parts[0].strip().strip('"'), 'year_extracted': parts[1].strip()}]))
+                            raw_data.append({
+                                'summary': parts[0].strip().strip('"'), 
+                                'year_extracted': parts[1].strip()
+                            })
+                if raw_data:
+                    df_fallback = pd.DataFrame(raw_data)
+                    df_fallback['year_extracted'] = pd.to_numeric(df_fallback['year_extracted'], errors='coerce')
+                    all_dfs.append(df_fallback)
         
         return pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
 
