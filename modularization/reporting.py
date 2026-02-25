@@ -386,7 +386,7 @@ class LatentKnowledgeReportGenerator:
         ax.spines['right'].set_visible(False)
         ax.grid(True, linestyle='--', alpha=0.3)
         if legend:
-            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False, fontsize=16)
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False, fontsize=22)
 
     def feedback_new_topics(self, max_new_topics: int = 8, max_total_topics: int = 10) -> None:
         """
