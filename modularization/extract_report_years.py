@@ -77,12 +77,39 @@ Abstract: {abstract}
             # Check for spark directory
             if self.corpus_path.parent.exists() and self.corpus_path.parent.is_dir():
                  csv_files = list(self.corpus_path.parent.glob('*.csv'))
-                 if csv_files:
-                     return pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
-            
-            self.logger.error(f"Corpus not found at {self.corpus_path}")
-            return pd.DataFrame()
-        return pd.read_csv(self.corpus_path)
+                 if not csv_files:
+                     self.logger.error(f"Corpus not found at {self.corpus_path}")
+                     return pd.DataFrame()
+            else:
+                self.logger.error(f"Corpus not found at {self.corpus_path}")
+                return pd.DataFrame()
+        else:
+            csv_files = [self.corpus_path]
+
+        all_dfs = []
+        for path in csv_files:
+            try:
+                all_dfs.append(pd.read_csv(path))
+            except Exception:
+                self.logger.warning(f"Standard read failed for {path.name}. Using rsplit fallback.")
+                raw_data = []
+                with open(path, 'r', encoding='utf-8') as f:
+                    f.readline() # Skip header
+                    for line in f:
+                        line = line.strip()
+                        if not line: continue
+                        parts = line.rsplit(',', 1)
+                        if len(parts) == 2:
+                            raw_data.append({
+                                'summary': parts[0].strip().strip('"'), 
+                                'year_extracted': parts[1].strip()
+                            })
+                if raw_data:
+                    df_fallback = pd.DataFrame(raw_data)
+                    df_fallback['year_extracted'] = pd.to_numeric(df_fallback['year_extracted'], errors='coerce')
+                    all_dfs.append(df_fallback)
+        
+        return pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
 
     def _load_whitelist(self) -> List[str]:
         if not self.whitelist_path.exists():

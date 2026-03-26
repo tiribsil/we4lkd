@@ -200,28 +200,46 @@ class CandidateModelTraining:
             self.logger.error(f"Corpus path not found at {self.corpus_path}")
             return None
         
-        try:
-            if self.corpus_path.is_dir():
-                csv_files = list(self.corpus_path.glob('*.csv'))
-                if not csv_files: return None
-                df = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
-            else:
-                df = pd.read_csv(self.corpus_path)
+        if self.corpus_path.is_dir():
+            csv_files = list(self.corpus_path.glob('*.csv'))
+            if not csv_files: return None
+        else:
+            csv_files = [self.corpus_path]
+
+        all_dfs = []
+        for path in csv_files:
+            try:
+                all_dfs.append(pd.read_csv(path))
+            except Exception:
+                self.logger.warning(f"Standard read failed for {path.name}. Using rsplit fallback.")
+                raw_data = []
+                with open(path, 'r', encoding='utf-8') as f:
+                    f.readline() # Skip header
+                    for line in f:
+                        line = line.strip()
+                        if not line: continue
+                        parts = line.rsplit(',', 1)
+                        if len(parts) == 2:
+                            raw_data.append({'summary': parts[0].strip().strip('"'), 'year_extracted': parts[1].strip()})
+                if raw_data:
+                    df_fallback = pd.DataFrame(raw_data)
+                    df_fallback['year_extracted'] = pd.to_numeric(df_fallback['year_extracted'], errors='coerce')
+                    all_dfs.append(df_fallback)
+
+        if not all_dfs: return None
+        df = pd.concat(all_dfs, ignore_index=True)
             
-            if 'summary' not in df.columns:
-                self.logger.error("Column 'summary' not found in corpus")
-                return None
-            
-            if 'year_extracted' not in df.columns:
-                if 'year' in df.columns:
-                    df['year_extracted'] = df['year']
-                else:
-                    df['year_extracted'] = self.end_year # Fallback
-            
-            return df
-        except Exception as e:
-            self.logger.error(f"Error loading corpus: {e}")
+        if 'summary' not in df.columns:
+            self.logger.error("Column 'summary' not found in corpus")
             return None
+        
+        if 'year_extracted' not in df.columns:
+            if 'year' in df.columns:
+                df['year_extracted'] = df['year']
+            else:
+                df['year_extracted'] = self.end_year # Fallback
+        
+        return df
 
     def _prepare_sentences(self, start_year: int, target_end_year: int) -> List[List[str]]:
         """
