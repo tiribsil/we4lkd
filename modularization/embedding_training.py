@@ -444,6 +444,221 @@ class CandidateModelTraining:
             ]
         return []
 
+    # ------------------------------------------------------------------
+    # Analogies path: <project_root>/data/analogies.txt
+    # (two levels up from modularization/)
+    # ------------------------------------------------------------------
+    _ANALOGIES_PATH = Path(__file__).parent.parent / "data" / "analogies.txt"
+
+    def _load_analogies(self) -> Dict[str, List[Tuple[str, str, str, str]]]:
+        """
+        Parse data/analogies.txt into a dict mapping section name to a list
+        of 4-tuples (a, b, c, d).
+
+        File format (lines starting with ':' open a new section):
+
+            : grammar
+            man men woman women
+            ...
+
+            : biomedical
+            aspirin analgesic metformin antidiabetic
+            ...
+
+        Blank lines and lines starting with '#' are ignored.
+        """
+        path = self._ANALOGIES_PATH
+        if not path.exists():
+            self.logger.error(f"Analogies file not found: {path}")
+            return {}
+
+        sections: Dict[str, List[Tuple[str, str, str, str]]] = {}
+        current_section: Optional[str] = None
+
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith(":"):
+                    current_section = line[1:].strip().lower()
+                    sections.setdefault(current_section, [])
+                    continue
+                if current_section is None:
+                    continue  # skip orphan lines before any section header
+                parts = line.split()
+                if len(parts) == 4:
+                    sections[current_section].append(
+                        (parts[0], parts[1], parts[2], parts[3])
+                    )
+                else:
+                    self.logger.warning(
+                        f"Skipping malformed analogy line (expected 4 words): '{line}'"
+                    )
+
+        total = sum(len(v) for v in sections.values())
+        self.logger.info(
+            f"Loaded {total} analogy tuples from {len(sections)} section(s): "
+            + ", ".join(f"{k}({len(v)})" for k, v in sections.items())
+        )
+        return sections
+
+    def _load_model_wv(self, model_key: str) -> Optional[KeyedVectors]:
+        """
+        Load a trained model's KeyedVectors from disk.
+        Supports Word2Vec / FastText .model files saved by gensim.
+        Returns None if the file cannot be loaded.
+        """
+        model_dir = self.models_base_path / model_key
+        model_filename = f"{model_key}_{self.start_year}_{self.end_year}.model"
+        model_path = model_dir / model_filename
+
+        if not model_path.exists():
+            self.logger.warning(f"Model file not found for analogy eval: {model_path}")
+            return None
+
+        arch = model_key.split("_")[0]
+        try:
+            if arch == "w2v":
+                wv = Word2Vec.load(str(model_path)).wv
+            elif arch == "ft":
+                wv = FastText.load(str(model_path)).wv
+            else:
+                self.logger.warning(f"Unknown architecture for loading: {arch}")
+                return None
+            return wv
+        except Exception as e:
+            self.logger.error(f"Failed to load model {model_key}: {e}")
+            return None
+
+    def _score_analogies(
+        self,
+        wv: KeyedVectors,
+        analogies: List[Tuple[str, str, str, str]],
+        topn: int = 10,
+    ) -> float:
+        """
+        Evaluate a list of analogy 4-tuples against a KeyedVectors object.
+
+        For each (a, b, c, d) we ask: b - a + c ≈ ?
+        A hit is counted when `d` appears in the top-`topn` most similar words.
+        Skips tuples where any word is not in the vocabulary.
+
+        Returns accuracy in [0, 1] (0 if no valid tuple at all).
+        """
+        hits = 0
+        total = 0
+        vocab = set(wv.key_to_index.keys())
+
+        for a, b, c, d in analogies:
+            if not all(w in vocab for w in (a, b, c, d)):
+                continue  # skip OOV tuples silently
+            total += 1
+            try:
+                results = wv.most_similar(positive=[b, c], negative=[a], topn=topn)
+                predicted_words = {r[0] for r in results}
+                if d in predicted_words:
+                    hits += 1
+            except Exception:
+                pass  # rare numerical edge cases
+
+        return hits / total if total > 0 else 0.0
+
+    def _filter_best_by_analogy(
+        self,
+        candidates: Dict[str, List[Any]],
+        grammar_weight: float = 0.4,
+        biomedical_weight: float = 0.6,
+    ) -> Dict[str, List[Any]]:
+        """
+        Rank candidate models using word-embedding analogy tasks and return
+        only the **best-scoring model per architecture** (e.g., one w2v and
+        one ft).
+
+        Scoring:
+          score = grammar_weight  * grammar_accuracy
+                + biomedical_weight * biomedical_accuracy
+
+        Models for which the .model file cannot be loaded are skipped and
+        will NOT survive the filter (unless they are the only entry for their
+        architecture, in which case they are kept as a fallback).
+
+        Parameters
+        ----------
+        candidates:
+            Dict mapping model key → params list (output of the training loop).
+        grammar_weight, biomedical_weight:
+            Relative importance of the two analogy categories (must sum to 1).
+
+        Returns
+        -------
+        Dict with one entry per distinct architecture prefix.
+        """
+        self.logger.info("=== Analogy-based model filtering ===")
+
+        # Load analogy sets from file
+        analogy_sections = self._load_analogies()
+        grammar_analogies = analogy_sections.get("grammar", [])
+        biomedical_analogies = analogy_sections.get("biomedical", [])
+
+        if not grammar_analogies and not biomedical_analogies:
+            self.logger.warning(
+                "No analogy data loaded; skipping filter (returning all candidates)"
+            )
+            return candidates
+
+        # Group candidates by architecture prefix (first segment before '_')
+        arch_groups: Dict[str, List[str]] = {}
+        for key in candidates:
+            arch = key.split("_")[0]
+            arch_groups.setdefault(arch, []).append(key)
+
+        best_per_arch: Dict[str, List[Any]] = {}
+
+        for arch, keys in arch_groups.items():
+            self.logger.info(f"Evaluating {len(keys)} {arch.upper()} candidate(s)")
+
+            scored: List[Tuple[float, str]] = []
+            fallback_key = keys[0]  # kept if nothing can be loaded
+
+            for key in keys:
+                wv = self._load_model_wv(key)
+                if wv is None:
+                    self.logger.warning(f"Skipping {key} (could not load wv)")
+                    continue
+
+                g_acc = self._score_analogies(wv, grammar_analogies)
+                b_acc = self._score_analogies(wv, biomedical_analogies)
+                combined = grammar_weight * g_acc + biomedical_weight * b_acc
+
+                self.logger.info(
+                    f"  {key}: grammar={g_acc:.3f}, biomedical={b_acc:.3f}, "
+                    f"combined={combined:.3f}"
+                )
+                scored.append((combined, key))
+
+                # free memory immediately
+                del wv
+                gc.collect()
+
+            if scored:
+                best_score, best_key = max(scored, key=lambda x: x[0])
+                self.logger.info(
+                    f"Best {arch.upper()}: {best_key} (score={best_score:.3f})"
+                )
+                best_per_arch[best_key] = candidates[best_key]
+            else:
+                # Fallback: keep first candidate when all loads fail
+                self.logger.warning(
+                    f"All {arch.upper()} models failed to load; keeping {fallback_key} as fallback"
+                )
+                best_per_arch[fallback_key] = candidates[fallback_key]
+
+        self.logger.info(
+            f"Analogy filter: {len(candidates)} → {len(best_per_arch)} model(s) kept"
+        )
+        return best_per_arch
+
     def run(self) -> Dict[str, List[Any]]:
         """
         Executa LHS (Latin Hypercube Sampling) e treina modelos em paralelo.
@@ -536,5 +751,8 @@ class CandidateModelTraining:
                     self.logger.info(f"Finished & Saved: {m_key}")
                 else:
                     self.logger.warning(f"Failed task: {key}")
+
+        # Filter to best model per architecture using analogy tasks
+        self.model_combinations = self._filter_best_by_analogy(self.model_combinations)
 
         return self.model_combinations
