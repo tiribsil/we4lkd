@@ -1,5 +1,4 @@
 import os
-import urllib.request
 import gc
 import itertools
 from pathlib import Path
@@ -451,86 +450,6 @@ class CandidateModelTraining:
     # ------------------------------------------------------------------
     _ANALOGIES_PATH = Path(__file__).parent.parent / "data" / "analogies.txt"
 
-    # Google word2vec analogy test set (Mikolov et al., 2013)
-    # Uses the standard `: section-name / word1 word2 word3 word4` format.
-    _GOOGLE_ANALOGIES_URL = (
-        "https://raw.githubusercontent.com/tmikolov/word2vec/master/questions-words.txt"
-    )
-
-    # Curated biomedical analogies file (drug classes, disease-symptom,
-    # anatomy, treatment relationships).  Edit this file to add/remove pairs.
-    _BIOMEDICAL_ANALOGIES_PATH = (
-        Path(__file__).parent.parent / "data" / "biomedical_analogies.txt"
-    )
-
-    def _ensure_analogies(self) -> None:
-        """
-        Download and assemble the analogies file if it doesn't exist yet.
-
-        Sources
-        -------
-        - Grammar  : Google word2vec ``questions-words.txt`` (Mikolov et al.,
-          2013).  All original sections are collapsed into a single
-          ``grammar`` section so the scoring code can find it.
-        - Biomedical: read from ``data/biomedical_analogies.txt`` next to this
-          repo's data directory.
-        """
-        path = self._ANALOGIES_PATH
-        if path.exists():
-            return  # nothing to do
-
-        self.logger.info(
-            f"Analogies file not found at {path}. Downloading from online sources..."
-        )
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        # --- 1. Grammar section: download questions-words.txt ---------------
-        grammar_lines: list[str] = []
-        try:
-            self.logger.info(f"Fetching {self._GOOGLE_ANALOGIES_URL}")
-            with urllib.request.urlopen(self._GOOGLE_ANALOGIES_URL, timeout=30) as resp:
-                raw = resp.read().decode("utf-8")
-            # Collapse all sections from questions-words.txt into one
-            # ``grammar`` block (skip the original section headers).
-            for line in raw.splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                if stripped.startswith(":"):
-                    continue  # drop original section headers
-                grammar_lines.append(stripped)
-            self.logger.info(
-                f"Downloaded {len(grammar_lines)} grammar analogy lines."
-            )
-        except Exception as exc:
-            self.logger.warning(
-                f"Could not download grammar analogies: {exc}. "
-                "The 'grammar' section will be empty."
-            )
-
-        # --- 2. Biomedical section: read from file --------------------------
-        biomedical_text = ""
-        bio_path = self._BIOMEDICAL_ANALOGIES_PATH
-        if bio_path.exists():
-            biomedical_text = bio_path.read_text(encoding="utf-8")
-            self.logger.info(f"Read biomedical analogies from {bio_path}.")
-        else:
-            self.logger.warning(
-                f"Biomedical analogies file not found: {bio_path}. "
-                "The 'biomedical' section will be empty."
-            )
-
-        # --- 3. Write combined file -----------------------------------------
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(": grammar\n")
-            for line in grammar_lines:
-                fh.write(line + "\n")
-            fh.write("\n")
-            fh.write(biomedical_text)
-            fh.write("\n")
-
-        self.logger.info(f"Analogies file written to {path}.")
-
     def _load_analogies(self) -> Dict[str, List[Tuple[str, str, str, str]]]:
         """
         Parse data/analogies.txt into a dict mapping section name to a list
@@ -547,13 +466,10 @@ class CandidateModelTraining:
             ...
 
         Blank lines and lines starting with '#' are ignored.
-        If the file does not exist it is downloaded automatically.
         """
-        self._ensure_analogies()  # download if missing
         path = self._ANALOGIES_PATH
         if not path.exists():
-            self.logger.error(f"Analogies file not found and could not be created: {path}")
-            return {}
+            raise FileNotFoundError(f"Analogies file not found at {path}. It is required for evaluating models.")
 
         sections: Dict[str, List[Tuple[str, str, str, str]]] = {}
         current_section: Optional[str] = None
