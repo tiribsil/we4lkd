@@ -28,7 +28,7 @@ class PreliminaryPipeline:
         self.max_new_topics = max_new_topics
         self.train_val_test_split = train_val_test_split
         self.use_lhs = True
-        self.num_combinations = 30
+        self.num_combinations = 15
         
         self.normalized_disease_name = normalize_disease_name(disease_name)
         self.today_year = datetime.datetime.now().year

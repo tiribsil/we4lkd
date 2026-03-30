@@ -168,8 +168,10 @@ class ValidationModule:
                 
                 # Determina tipo básico (assumindo word2vec se não especificado diferente no nome)
                 model_type_str = model_file.stem.lower()
-                if "fasttext" in model_type_str:
+                if "fasttext" in model_type_str or "ft_" in model_type_str:
                     m_type = ModelType.FASTTEXT
+                elif "glove" in model_type_str:
+                    m_type = ModelType.GLOVE
                 else:
                     m_type = ModelType.WORD2VEC
                 
@@ -357,6 +359,8 @@ class ValidationModule:
                 model = Word2Vec.load(str(model_path))
             elif model_type_enum == ModelType.FASTTEXT:
                 model = FastText.load(str(model_path))
+            elif model_type_enum == ModelType.GLOVE:
+                model = KeyedVectors.load(str(model_path))
             else:
                 return None
             
