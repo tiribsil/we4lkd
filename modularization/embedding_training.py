@@ -153,7 +153,7 @@ class GloVeModel(BaseEmbeddingModel):
         epochs = self.config.custom_params.get('epochs', 15)
         learning_rate = self.config.custom_params.get('alpha', 0.05)
         min_count = self.config.custom_params.get('min_count', 2)
-        max_vocab_size = self.config.custom_params.get('max_vocab_size', 20000)
+        max_vocab_size = self.config.custom_params.get('max_vocab_size', 100000)
         
         # 1. Build vocab
         word_counts = defaultdict(int)
@@ -826,6 +826,15 @@ class CandidateModelTraining:
         def _worker(task_data):
             model_key, arch, params = task_data
             try:
+                # Verificar se o modelo já existe
+                model_output_dir = self.models_base_path / model_key
+                model_filename = f"{model_key}_{self.start_year}_{self.end_year}.model"
+                model_path = model_output_dir / model_filename
+                
+                if model_path.exists():
+                    self.logger.info(f"Model already exists, skipping training: {model_filename}")
+                    return (model_key, params, None)
+
                 # Usa a infraestrutura existente para criar config compatível
                 config = self._create_config_from_params(arch, params, self.end_year)
                 if not config:
@@ -852,10 +861,12 @@ class CandidateModelTraining:
                 
                 if result:
                     m_key, m_params, m_instance = result
-                    self._save_trained_model(m_instance, m_key, self.start_year, self.end_year)
+                    
+                    if m_instance is not None:
+                        self._save_trained_model(m_instance, m_key, self.start_year, self.end_year)
+                        self.logger.info(f"Finished & Saved: {m_key}")
                     
                     self.model_combinations[m_key] = m_params
-                    self.logger.info(f"Finished & Saved: {m_key}")
                 else:
                     self.logger.warning(f"Failed task: {key}")
 
