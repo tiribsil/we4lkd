@@ -254,7 +254,8 @@ class CandidateModelTraining:
         start_year: int,
         end_year: int,
         use_lhs: bool = True,
-        num_combinations: int = 7
+        num_combinations: int = 7,
+        use_glove: bool = False
     ):
         self.logger = get_logger(self.__class__.__name__)
         self.disease_name = normalize_disease_name(disease_name)
@@ -262,6 +263,7 @@ class CandidateModelTraining:
         self.end_year = end_year
         self.use_lhs = use_lhs
         self.num_combinations = num_combinations
+        self.use_glove = use_glove
         
         self.model_combinations: Dict[str, List[Any]] = {}
         self.model_combinations.update({
@@ -792,14 +794,19 @@ class CandidateModelTraining:
         ]
 
         # 3. Gerar Amostras (LHS ou Grid)
+        w2v_sets = []
+        ft_sets = []
+        glove_sets = []
+        
         if self.use_lhs:
             w2v_sets = self._generate_lhs_samples(w2v_specs, self.num_combinations)
             ft_sets = self._generate_lhs_samples(ft_specs, self.num_combinations)
-            glove_sets = self._generate_lhs_samples(glove_specs, self.num_combinations)
+            if self.use_glove:
+                glove_sets = self._generate_lhs_samples(glove_specs, self.num_combinations)
         else:
             w2v_sets = self._generate_grid_samples(w2v_specs, self.num_combinations)
-            ft_sets = []
-            glove_sets = self._generate_grid_samples(glove_specs, self.num_combinations)
+            if self.use_glove:
+                glove_sets = self._generate_grid_samples(glove_specs, self.num_combinations)
 
         # 4. Construir lista de tarefas
         tasks = []

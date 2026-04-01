@@ -28,6 +28,7 @@ class PreliminaryPipeline:
         self.max_new_topics = max_new_topics
         self.train_val_test_split = train_val_test_split
         self.use_lhs = True
+        self.use_glove = False
         self.num_combinations = 15
         
         self.normalized_disease_name = normalize_disease_name(disease_name)
@@ -118,6 +119,7 @@ class PreliminaryPipeline:
                 start_year=model_dev_start_year,
                 end_year=self.model_dev_end_year,
                 use_lhs=self.use_lhs,
+                use_glove=self.use_glove,
                 num_combinations=self.num_combinations
             )
             self.trained_models_info = cmt.run()
