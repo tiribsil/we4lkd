@@ -153,7 +153,7 @@ class GloVeModel(BaseEmbeddingModel):
         epochs = self.config.custom_params.get('epochs', 15)
         learning_rate = self.config.custom_params.get('alpha', 0.05)
         min_count = self.config.custom_params.get('min_count', 2)
-        max_vocab_size = self.config.custom_params.get('max_vocab_size', 100000)
+        max_vocab_size = self.config.custom_params.get('max_vocab_size', 50000)
         
         # 1. Build vocab
         word_counts = defaultdict(int)
