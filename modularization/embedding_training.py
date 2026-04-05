@@ -669,6 +669,7 @@ class CandidateModelTraining:
         candidates: Dict[str, List[Any]],
         grammar_weight: float = 0.4,
         biomedical_weight: float = 0.6,
+        include_worst: bool = True,
     ) -> Dict[str, List[Any]]:
         """
         Rank candidate models using word-embedding analogy tasks and return
@@ -714,6 +715,7 @@ class CandidateModelTraining:
             arch_groups.setdefault(arch, []).append(key)
 
         best_per_arch: Dict[str, List[Any]] = {}
+        all_scored: List[Tuple[float, str]] = []
 
         for arch, keys in arch_groups.items():
             self.logger.info(f"Evaluating {len(keys)} {arch.upper()} candidate(s)")
@@ -736,6 +738,7 @@ class CandidateModelTraining:
                     f"combined={combined:.3f}"
                 )
                 scored.append((combined, key))
+                all_scored.append((combined, key))
 
                 # free memory immediately
                 del wv
@@ -753,6 +756,14 @@ class CandidateModelTraining:
                     f"All {arch.upper()} models failed to load; keeping {fallback_key} as fallback"
                 )
                 best_per_arch[fallback_key] = candidates[fallback_key]
+
+        if include_worst and all_scored:
+            worst_score, worst_key = min(all_scored, key=lambda x: x[0])
+            self.logger.info(
+                f"Overall worst model identification: {worst_key} (score={worst_score:.3f})"
+            )
+            # Add to the dictionary (it might already be there if it was the fallback or the 'best' of its arch)
+            best_per_arch[worst_key] = candidates[worst_key]
 
         self.logger.info(
             f"Analogy filter: {len(candidates)} → {len(best_per_arch)} model(s) kept"
@@ -878,6 +889,8 @@ class CandidateModelTraining:
                     self.logger.warning(f"Failed task: {key}")
 
         # Filter to best model per architecture using analogy tasks
-        self.model_combinations = self._filter_best_by_analogy(self.model_combinations)
+        self.model_combinations = self._filter_best_by_analogy(
+            self.model_combinations, include_worst=True
+        )
 
         return self.model_combinations
