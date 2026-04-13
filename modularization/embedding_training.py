@@ -667,35 +667,30 @@ class CandidateModelTraining:
     def _filter_best_by_analogy(
         self,
         candidates: Dict[str, List[Any]],
-        grammar_weight: float = 0.4,
-        biomedical_weight: float = 0.6,
         include_worst: bool = True,
     ) -> Dict[str, List[Any]]:
         """
         Rank candidate models using word-embedding analogy tasks and return
-        only the **best-scoring model per architecture** (e.g., one w2v and
-        one ft).
+        only the **best-scoring model per architecture** (e.g., one w2v,
+        one ft, one glove).
 
-        Scoring:
-          score = grammar_weight  * grammar_accuracy
-                + biomedical_weight * biomedical_accuracy
-
-        Models for which the .model file cannot be loaded are skipped and
-        will NOT survive the filter (unless they are the only entry for their
-        architecture, in which case they are kept as a fallback).
+        Normalization Strategy:
+          - For each strategy (grammar, biomedical), find the best accuracy among models of the same architecture.
+          - Divide each model's accuracy by that maximum to get a normalized [0, 1] score.
+          - Final score is the mean of these normalized scores.
 
         Parameters
         ----------
         candidates:
-            Dict mapping model key → params list (output of the training loop).
-        grammar_weight, biomedical_weight:
-            Relative importance of the two analogy categories (must sum to 1).
+            Dict mapping model key → params list.
+        include_worst:
+            If True, also include the model with the lowest overall normalized score.
 
         Returns
         -------
-        Dict with one entry per distinct architecture prefix.
+        Dict with the best model per architecture (and optionally the worst overall).
         """
-        self.logger.info("=== Analogy-based model filtering ===")
+        self.logger.info("=== Analogy-based model filtering (Normalized) ===")
 
         # Load analogy sets from file
         analogy_sections = self._load_analogies()
@@ -720,55 +715,70 @@ class CandidateModelTraining:
         for arch, keys in arch_groups.items():
             self.logger.info(f"Evaluating {len(keys)} {arch.upper()} candidate(s)")
 
-            scored: List[Tuple[float, str]] = []
+            raw_metrics: Dict[str, Dict[str, float]] = {}
             fallback_key = keys[0]  # kept if nothing can be loaded
 
             for key in keys:
                 wv = self._load_model_wv(key)
                 if wv is None:
-                    self.logger.warning(f"Skipping {key} (could not load wv)")
                     continue
 
                 g_acc = self._score_analogies(wv, grammar_analogies)
                 b_acc = self._score_analogies(wv, biomedical_analogies)
-                combined = grammar_weight * g_acc + biomedical_weight * b_acc
-
-                self.logger.info(
-                    f"  {key}: grammar={g_acc:.3f}, biomedical={b_acc:.3f}, "
-                    f"combined={combined:.3f}"
-                )
-                scored.append((combined, key))
-                all_scored.append((combined, key))
+                raw_metrics[key] = {
+                    "grammar": g_acc,
+                    "biomedical": b_acc
+                }
 
                 # free memory immediately
                 del wv
                 gc.collect()
 
-            if scored:
-                best_score, best_key = max(scored, key=lambda x: x[0])
-                self.logger.info(
-                    f"Best {arch.upper()}: {best_key} (score={best_score:.3f})"
-                )
-                best_per_arch[best_key] = candidates[best_key]
-            else:
-                # Fallback: keep first candidate when all loads fail
+            if not raw_metrics:
                 self.logger.warning(
                     f"All {arch.upper()} models failed to load; keeping {fallback_key} as fallback"
                 )
                 best_per_arch[fallback_key] = candidates[fallback_key]
+                continue
+
+            # Find max scores for this architecture to normalize
+            max_g = max((m["grammar"] for m in raw_metrics.values()), default=0.0)
+            max_b = max((m["biomedical"] for m in raw_metrics.values()), default=0.0)
+
+            # Compute normalized mean scores
+            arch_scored: List[Tuple[float, str]] = []
+            for key, metrics in raw_metrics.items():
+                norm_g = metrics["grammar"] / max_g if max_g > 0 else 0.0
+                norm_b = metrics["biomedical"] / max_b if max_b > 0 else 0.0
+                mean_norm = (norm_g + norm_b) / 2.0
+
+                self.logger.info(
+                    f"  {key}: grammar={metrics['grammar']:.3f} (norm={norm_g:.3f}), "
+                    f"biomedical={metrics['biomedical']:.3f} (norm={norm_b:.3f}), "
+                    f"final={mean_norm:.3f}"
+                )
+                arch_scored.append((mean_norm, key))
+                all_scored.append((mean_norm, key))
+
+            # Pick best for this architecture
+            best_score, best_key = max(arch_scored, key=lambda x: x[0])
+            self.logger.info(
+                f"Best {arch.upper()}: {best_key} (score={best_score:.3f})"
+            )
+            best_per_arch[best_key] = candidates[best_key]
 
         if include_worst and all_scored:
             worst_score, worst_key = min(all_scored, key=lambda x: x[0])
             self.logger.info(
                 f"Overall worst model identification: {worst_key} (score={worst_score:.3f})"
             )
-            # Add to the dictionary (it might already be there if it was the fallback or the 'best' of its arch)
             best_per_arch[worst_key] = candidates[worst_key]
 
         self.logger.info(
             f"Analogy filter: {len(candidates)} → {len(best_per_arch)} model(s) kept"
         )
         return best_per_arch
+
 
     def run(self) -> Dict[str, List[Any]]:
         """
