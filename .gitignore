@@ -1,5 +1,6 @@
 /.idea
 /data/*
+!/data/analogies.txt
 /.venv
 /.ipynb_checkpoints
 api_key.py
