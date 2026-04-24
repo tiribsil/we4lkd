@@ -72,6 +72,21 @@ Abstract: {abstract}
             self.logger.error(f"LLM inference error: {e}")
             return False
 
+    def _save_checkpoint(self, checkpoint_file: Path, processed_compounds: set, year_reported: dict):
+        """Salva o progresso atual em um arquivo de checkpoint."""
+        try:
+            records = []
+            for comp in processed_compounds:
+                if comp in year_reported:
+                    yr, abs_text = year_reported[comp]
+                    records.append({'compound': comp, 'year': yr, 'abstract_evidence': abs_text})
+                else:
+                    records.append({'compound': comp, 'year': None, 'abstract_evidence': None})
+            
+            pd.DataFrame(records).to_csv(checkpoint_file, index=False)
+        except Exception as e:
+            self.logger.error(f"Failed to save checkpoint: {e}")
+
     def _load_corpus(self) -> pd.DataFrame:
         if not self.corpus_path.exists():
             # Check for spark directory
@@ -124,6 +139,7 @@ Abstract: {abstract}
         Usa LLM para validar abstracts que mencionam a doença e o composto.
         """
         cache_file = self.cache_dir / f"ground_truth_llm.csv"
+        checkpoint_file = self.cache_dir / "ground_truth_llm_checkpoint.csv"
 
         # 1. Tentar carregar do cache
         if cache_file.exists() and not force_regenerate:
@@ -134,7 +150,24 @@ Abstract: {abstract}
             except Exception as e:
                 self.logger.warning(f"Failed to load cache ({e}). Regenerating...")
 
-        # 2. Gerar do zero
+        year_reported = {}
+        processed_compounds = set()
+
+        # 2. Tentar carregar do checkpoint (se não estiver forçando regeneração)
+        if checkpoint_file.exists() and not force_regenerate:
+            self.logger.info("Loading progress from checkpoint.")
+            try:
+                df_cp = pd.read_csv(checkpoint_file)
+                for _, row in df_cp.iterrows():
+                    comp = row['compound']
+                    processed_compounds.add(comp)
+                    if not pd.isna(row['year']):
+                        year_reported[comp] = (int(row['year']), row['abstract_evidence'])
+                self.logger.info(f"Resuming from checkpoint: {len(processed_compounds)} compounds already processed.")
+            except Exception as e:
+                self.logger.warning(f"Failed to load checkpoint ({e}).")
+
+        # 3. Gerar do zero ou continuar
         self.logger.info("Generating Ground Truth using LLM...")
         df = self._load_corpus()
         compounds = self._load_whitelist()
@@ -152,9 +185,12 @@ Abstract: {abstract}
             self.logger.warning("No abstracts found for the disease.")
             return {}
 
-        year_reported = {}
+        year_reported = year_reported # Mantém o que foi carregado do checkpoint
         
         for compound in tqdm(compounds, desc="Verifying compounds with LLM"):
+            if compound in processed_compounds:
+                continue
+                
             try:
                 compound_pat = r'\b' + re.escape(compound) + r'\b'
                 # Filter abstracts mentioning the compound
@@ -184,7 +220,13 @@ Abstract: {abstract}
                     
             except Exception as e:
                 self.logger.error(f"Error processing {compound}: {e}")
+                # Mesmo com erro, marcamos como processado para não travar o loop infinitamente se for erro de dado
+                processed_compounds.add(compound)
                 continue
+            
+            # Salvar checkpoint após cada composto processado
+            processed_compounds.add(compound)
+            self._save_checkpoint(checkpoint_file, processed_compounds, year_reported)
         
         self.logger.info(f"Ground Truth generated: {len(year_reported)} compounds found.")
 
@@ -198,6 +240,9 @@ Abstract: {abstract}
             df_out = pd.DataFrame(data_out)
             df_out.to_csv(cache_file, index=False)
             self.logger.info(f"Ground Truth saved to cache: {cache_file}")
+            
+            # Se terminou com sucesso, podemos remover o checkpoint ou mantê-lo
+            # Vou mantê-lo por segurança, mas o cache_file agora é o mestre.
         except Exception as e:
             self.logger.error(f"Could not save cache: {e}")
 
