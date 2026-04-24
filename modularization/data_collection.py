@@ -69,6 +69,7 @@ class DataCollection:
                 try:
                     # Query for articles published up to and including mid_year
                     query = f'(("{topic}"[Title/Abstract] OR "{topic}"[MeSH Terms])) AND ("1500":"{mid_year}"[DP]) AND (English[Language])'
+                    self.logger.info(f"PubMed search query (binary search): {query}")
                     
                     handle = Entrez.esearch(db='pubmed', term=query, retmax=0)
                     record = Entrez.read(handle)
@@ -223,6 +224,7 @@ class DataCollection:
         """
         date_filter = f'AND ("{year}"[DP])'
         final_query = f'({query} AND English[Language]) {date_filter}'
+        self.logger.info(f"PubMed search query: {final_query}")
         
         all_ids = set()
         
