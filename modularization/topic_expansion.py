@@ -20,6 +20,7 @@ class IterativeTopicExpansion:
 
         self.base_path = Path('./data') / self.normalized_disease_name
         self.topics_file = self.base_path / 'topics_of_interest.txt'
+        self.expanded_topics_file = self.base_path / 'expanded_topics.txt'
 
 
     def _get_current_topics_count(self) -> int:
@@ -135,6 +136,16 @@ class IterativeTopicExpansion:
         
         self.logger.info("Iterative topic expansion process finished.")
         final_expansion_year = current_year - 1
+        
+        # Save final topics to a separate file
+        if self.topics_file.exists():
+            try:
+                import shutil
+                shutil.copy(self.topics_file, self.expanded_topics_file)
+                self.logger.info(f"Final expanded topics saved to {self.expanded_topics_file}")
+            except Exception as e:
+                self.logger.error(f"Error saving expanded topics: {e}")
+
         self.logger.info(f"Iterative topic expansion process finished. Final expansion year: {final_expansion_year}.")
         return final_expansion_year
 
