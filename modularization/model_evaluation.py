@@ -238,7 +238,7 @@ class ModelEvaluator:
 
         # ── LKD-Composite (α = β = γ = 1/3) ──────────────────────────────────
         results['lkd_composite'] = (
-            results['tdg_mean'] + results['hit_at_10'] + results['auc_gain']
+            results['ndg_mean'] + results['hit_at_10'] + results['auc_gain']
         ) / 3.0
 
         return results
@@ -265,6 +265,7 @@ class ModelEvaluator:
 
         # Encontrar primeira recomendação no período de teste
         first_recommendation = {}
+        all_first_recommendation = {}
         
         for year in range(self.test_start_year, self.test_end_year + 1):
             year_path = self.top_n_base_path / str(year)
@@ -279,10 +280,26 @@ class ModelEvaluator:
                 
                 if col in df.columns:
                     for compound in df[col].values:
+                        if compound not in all_first_recommendation:
+                            all_first_recommendation[compound] = year
                         if compound not in first_recommendation and compound in ground_truth:
                             first_recommendation[compound] = year
             except Exception as e:
                 self.logger.error(f"Error reading ranking file for year {year}: {e}")
+
+        # Calculate hit percentage based on user's rules
+        hits = 0
+        all_compounds = set(all_first_recommendation.keys()).union(set(ground_truth.keys()))
+        for c in all_compounds:
+            rec_year = all_first_recommendation.get(c)
+            rep_year = ground_truth.get(c)
+            
+            if rec_year is not None and rep_year is None:
+                hits += 1  # first recommendation but no report year
+            elif rec_year is not None and rep_year is not None and rec_year < rep_year:
+                hits += 1  # first recommendation before report year
+
+        hit_percentage = (hits / len(all_compounds) * 100) if all_compounds else 0.0
 
         # Preparar dados
         details = []
@@ -314,6 +331,7 @@ class ModelEvaluator:
         self.logger.info(f"  Anticipation Median: {median_early}")
         self.logger.info(f"  Anticipation Std Dev: {std_dev:.2f}")
         self.logger.info(f"  Anticipation Mode: {mode}")
+        self.logger.info(f"  Hit Percentage: {hit_percentage:.2f}%")
         
         self.logger.info("Top 5 Biggest Anticipations:")
         top_5_biggest = details_df.nlargest(5, 'years_early')

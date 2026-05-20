@@ -388,6 +388,53 @@ class LatentKnowledgeReportGenerator:
         if legend:
             ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False, fontsize=22)
 
+    def generate_anticipation_report(self):
+        """Generates a CSV report with first recommendation year, report year, and anticipation for each compound."""
+        if not self.ground_truth:
+            self.logger.warning("No ground truth available to generate anticipation report.")
+            return
+
+        self.logger.info("Generating anticipation report...")
+        data = []
+
+        for name, report_year in self.ground_truth.items():
+            first_rank_year = None
+            for yr in range(self.corpus_start_year, self.target_year + 1):
+                rank_dir = self.top_n_path / str(yr)
+                rank_file = list(rank_dir.glob("top_*_score.csv"))
+                if rank_file:
+                    try:
+                        rdf = pd.read_csv(rank_file[0])
+                        col = 'chemical_name' if 'chemical_name' in rdf.columns else 'compound_name'
+                        if name in rdf[col].values:
+                            first_rank_year = yr
+                            break
+                    except Exception as e:
+                        self.logger.error(f"Error reading {rank_file[0]}: {e}")
+
+            if first_rank_year is not None:
+                anticipation = report_year - first_rank_year
+                data.append({
+                    'compound': name,
+                    'first_recommendation_year': first_rank_year,
+                    'report_year': report_year,
+                    'anticipation': anticipation
+                })
+
+        if not data:
+            self.logger.warning("No anticipation data generated.")
+            return
+
+        df = pd.DataFrame(data)
+        df = df.sort_values(by='anticipation', ascending=False)
+        
+        output_path = self.validation_path / f"anticipation_report_{self.target_year}.csv"
+        try:
+            df.to_csv(output_path, index=False)
+            self.logger.info(f"Anticipation report saved to {output_path}")
+        except Exception as e:
+            self.logger.error(f"Error saving anticipation report: {e}")
+
     def feedback_new_topics(self, max_new_topics: int = 8, max_total_topics: int = 10) -> None:
         """
         Lê potential_treatments.txt (gerado nesta run) e adiciona novos termos
@@ -692,6 +739,7 @@ class LatentKnowledgeReportGenerator:
             self.generate_ranking_convergence_plot()
             self.generate_lead_time_scatter_plot()
             self.generate_discovery_timeline_plot()
+            self.generate_anticipation_report()
         
         # 3. Gerar lista de Tratamentos Potenciais
         top_score = self._get_top_compounds_from_file('score', self.target_year)
