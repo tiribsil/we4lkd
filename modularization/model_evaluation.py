@@ -236,10 +236,10 @@ class ModelEvaluator:
         results['emergence_mean'] = float(np.mean(emergence_scores)) if emergence_scores else 0.0
         results['emergence_max']  = float(np.max(emergence_scores))  if emergence_scores else 0.0
 
-        # ── LKD-Composite (α = β = γ = 1/3) ──────────────────────────────────
+        # ── LKD-Composite (α = 0.8 β = 0.2) ──────────────────────────────────
         results['lkd_composite'] = (
-            results['ndg_mean'] + results['hit_at_10'] + results['auc_gain']
-        ) / 3.0
+            0.8 * results['ndg_mean'] + 0.2 * results['hit_at_10']
+        ) / 1.0
 
         return results
 
@@ -376,7 +376,7 @@ class ModelEvaluator:
             f"    mean={ext['emergence_mean']:.4f}  max={ext['emergence_max']:.4f}"
         )
         self.logger.info(f"  {'─'*36}")
-        self.logger.info(f"  LKD-Composite (α=β=γ=1/3): {ext['lkd_composite']:.4f}")
+        self.logger.info(f"  LKD-Composite (α=0.8 β=0.2): {ext['lkd_composite']:.4f}")
         self.logger.info(f"{'='*40}")
         
         # Salvar CSV
