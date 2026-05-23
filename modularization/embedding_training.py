@@ -255,7 +255,8 @@ class CandidateModelTraining:
         end_year: int,
         use_lhs: bool = True,
         num_combinations: int = 7,
-        use_glove: bool = False
+        use_glove: bool = False,
+        lhs_seed: int = 42,
     ):
         self.logger = get_logger(self.__class__.__name__)
         self.disease_name = normalize_disease_name(disease_name)
@@ -264,6 +265,7 @@ class CandidateModelTraining:
         self.use_lhs = use_lhs
         self.num_combinations = num_combinations
         self.use_glove = use_glove
+        self.lhs_seed = lhs_seed
         
         self.model_combinations: Dict[str, List[Any]] = {}
         self.model_combinations.update({
@@ -465,7 +467,7 @@ class CandidateModelTraining:
         returns list of dicts mapping param name to sampled value
         """
         d = len(param_specs)
-        sampler = qmc.LatinHypercube(d=d, seed=None)
+        sampler = qmc.LatinHypercube(d=d, seed=self.lhs_seed)
         raw = sampler.random(n=n_samples)  # shape (n_samples, d)
         out = []
         for i in range(n_samples):
