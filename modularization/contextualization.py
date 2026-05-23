@@ -262,7 +262,6 @@ class ContextualizationModule:
 
 if __name__ == "__main__":
     # Compounds to analyze
-    # @ti só apontar para o arquivo de compostos finais, e o código vai ler os compostos de lá. Por enquanto, vou deixar uma lista hardcoded pra vc testar.
     compounds = [
         "tuspetinib",
         "isavuconazonium",
