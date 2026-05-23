@@ -78,7 +78,7 @@ The final XAI layer. It takes the top-ranked candidates for the current year and
 
 1.  **Clone the repository:**
     ```sh
-    git clone https://github.com/tiribsil/we4lkd.git
+    git clone <remote_repository>
     cd we4lkd
     ```
 
@@ -92,25 +92,27 @@ The final XAI layer. It takes the top-ranked candidates for the current year and
 
 ## Usage
 
-The pipeline is now centered in the `modularization` directory.
+The pipeline is centered in the `modularization` directory.
 
 1.  **Set the Target Disease**:
-    Specify the disease in `target_disease.txt` (root).
+    Specify the disease in `main.py`.
     ```
-    acute myeloid leukemia
+    pipeline = PreliminaryPipeline(
+        disease_name='TARGET DISEASE HERE',
+        max_topics=9,
+        max_new_topics=9,
+        train_val_test_split=[0.6, 0.2, 0.2]
+    )
     ```
 
-2.  **Configure `.env`**:
-    Provide your API keys and paths if necessary in the `.env` file.
-
-3.  **Run the Pipeline**:
+2.  **Run the Pipeline**:
     The main entry point is `modularization/main.py`.
     ```sh
     python modularization/main.py
     ```
 
-4.  **Checkpoints**:
-    The pipeline saves its state in `artifacts/`. If interrupted, it will resume from the last successful phase.
+1.  **Checkpoints**:
+    The pipeline saves its state in `artifacts/`. If interrupted, it will resume from the last successful phase. The pipeline saves its generated data in the `data/<target_disease>` folder.
 
 ## Project Structure
 
@@ -147,6 +149,3 @@ The pipeline is now centered in the `modularization` directory.
 -   This project is an extension of the methodologies presented in:
     -   [Tshitoyan et al., *Nature* (2019)](https://www.nature.com/articles/s41586-019-1335-8)
     -   [Berto et al., *Expert Systems with Applications* (2024)](https://doi.org/10.1016/j.eswa.2024.123566)
--   This work is based on an undergraduate research proposal for FAPESP.
--   Special thanks to Prof. Dr. Tiago Agostinho de Almeida (UFSCar) for his guidance and supervision.
--   Universidade Federal de São Carlos (UFSCar), Sorocaba Campus.
