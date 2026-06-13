@@ -394,7 +394,7 @@ class ModelEvaluator:
             else:
                 annual_scores[year] = 0.0
 
-        return mean_early, annual_scores
+        return ext['lkd_composite'], annual_scores
 
     def run(self) -> bool:
         """

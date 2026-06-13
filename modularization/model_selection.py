@@ -108,7 +108,7 @@ class ModelSelector:
                     'years_early': s
                 })
             
-            self.logger.info(f"Candidate {model_name} Score: {score:.2f}")
+            self.logger.info(f"Candidate {model_name} Score: {score:.4f}")
 
         # 3. Seleção
         if not model_scores:

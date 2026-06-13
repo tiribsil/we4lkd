@@ -32,7 +32,7 @@ class PreliminaryPipeline:
         self.num_combinations = 15
         
         self.normalized_disease_name = normalize_disease_name(disease_name)
-        self.today_year = datetime.datetime.now().year
+        self.today_year = 2025 # datetime.datetime.now().year
         
         # Initialize logging
         LoggerFactory.setup(log_to_file=True, log_file='logs/preliminary_pipeline.log')
@@ -237,7 +237,7 @@ class PreliminaryPipeline:
 
 if __name__ == '__main__':
     pipeline = PreliminaryPipeline(
-        disease_name='acute myeloid leukemia',
+        disease_name='Pancreatic Cancer',
         max_topics=9,
         max_new_topics=9,
         train_val_test_split=[0.6, 0.2, 0.2]

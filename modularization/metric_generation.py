@@ -131,7 +131,7 @@ class ValidationModule:
         Carrega o Ground Truth (T3) para filtragem.
         Retorna dicionário {composto: ano_primeiro_reporte}.
         """
-        gt_path = self.base_path / "ground_truth_cache" / "ground_truth_t3.csv"
+        gt_path = self.base_path / "ground_truth_cache" / "ground_truth_llm.csv"
         if not gt_path.exists():
             self.logger.warning(f"Ground Truth file not found at {gt_path}. Filtering disabled.")
             return {}
